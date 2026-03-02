@@ -1,1 +1,33 @@
+name: "ComfoBox MQTT Bridge"
+slug: "comfobox_mqtt"
+version: "1.0.0"
+description: "Zehnder ComfoBox Series 5 (ELESTA) RS485/BACnet → MQTT"
+startup: services
+boot: true
+arch:
+  - aarch64
+  - armv7
+  - armhf
+  - amd64
 
+options:
+  use_socat: true
+  waveshare_host: "192.168.0.24"
+  waveshare_port: 4197
+  serial_port: "/tmp/comfobox"
+  baudrate: 38400
+  mqtt_host: "core-mosquitto"
+  mqtt_port: 1883
+  mqtt_user: ""
+  mqtt_pass: ""
+
+schema:
+  use_socat: bool
+  waveshare_host: str
+  waveshare_port: int
+  serial_port: str
+  baudrate: int
+  mqtt_host: str
+  mqtt_port: int
+  mqtt_user: str
+  mqtt_pass: password
