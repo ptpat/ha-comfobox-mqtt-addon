@@ -1,0 +1,2 @@
+2016-04-18 20:59:46,635 [1] DEBUG ComfoBoxMqtt.Models.Items.SpecialMqttItem`1 - PublishValue(): ComfoBox/Special/NumberOfWritesPer24h = 0
+2016-04-18 20:59:46,658 [1] ERROR ComfoBoxMqttConsole.Program - Run() has thrown an exception: Der Anschluss COM8 ist nicht vorhanden.
