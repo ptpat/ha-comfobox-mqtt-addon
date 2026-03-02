@@ -1,11 +1,13 @@
 name: "ComfoBox MQTT Bridge"
 slug: "comfobox_mqtt"
-version: "1.0.2"
+version: "1.0.4"
 description: "Zehnder ComfoBox Series 5 (ELESTA) RS485/BACnet → MQTT Bridge"
 startup: services
 boot: true
 init: false
 build: .
+hassio_api: false
+homeassistant_api: false
 arch:
   - aarch64
   - armv7
