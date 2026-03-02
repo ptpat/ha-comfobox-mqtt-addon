@@ -4,11 +4,15 @@ version: "1.0.0"
 description: "Zehnder ComfoBox Series 5 (ELESTA) RS485/BACnet → MQTT"
 startup: services
 boot: true
+init: false
 arch:
   - aarch64
   - armv7
   - armhf
   - amd64
+
+map:
+  - config:rw
 
 options:
   use_socat: true
