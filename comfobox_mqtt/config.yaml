@@ -2,20 +2,24 @@ name: "ComfoBox MQTT Bridge"
 slug: "comfobox_mqtt"
 version: "1.0.4"
 description: "Zehnder ComfoBox Series 5 (ELESTA) RS485/BACnet → MQTT Bridge"
+url: "https://github.com/ptpat/ha-comfobox-mqtt-addon"
+
 startup: services
-boot: true
+boot: auto
 init: false
-build: .
-hassio_api: false
-homeassistant_api: false
+
 arch:
   - aarch64
   - armv7
   - armhf
   - amd64
 
-map:
-  - config:rw
+# Optional, aber bei MQTT-Bridge sinnvoll (wie bei vielen Add-ons üblich)
+services:
+  - mqtt:need
+
+# Lass build erstmal drin, damit der Supervisor deinen Dockerfile baut
+build: .
 
 options:
   use_socat: true
