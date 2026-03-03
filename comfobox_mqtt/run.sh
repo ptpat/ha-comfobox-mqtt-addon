@@ -80,7 +80,7 @@ if [ "$use_socat" = "true" ]; then
   ls -la "$serial_port" || true
 fi
 
-# --- minimal config patch (only safe replacements) ---
+# --- minimal config patch ---
 if [ -f "$CFG" ]; then
   echo "[INFO] Patching config"
 
@@ -93,8 +93,9 @@ if [ -f "$CFG" ]; then
   # Baudrate
   sed -i "s|<value>76800</value>|<value>${baudrate}</value>|g" "$CFG" || true
 
-  # --- NEU: BacnetMasterId auf 11 setzen ---
-  sed -i '/BacnetMasterId/{n;s|<value>.*</value>|<value>11</value>|}' "$CFG" || true
+  # --- BACnet IDs ---
+  sed -i '/BacnetMasterId/{n;s|<value>.*</value>|<value>1</value>|}' "$CFG" || true
+  sed -i '/BacnetClientId/{n;s|<value>.*</value>|<value>5</value>|}' "$CFG" || true
 fi
 
 echo "[INFO] Starting ComfoBoxMqttConsole"
