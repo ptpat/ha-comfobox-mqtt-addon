@@ -1,6 +1,6 @@
 name: "ComfoBox MQTT Bridge"
 slug: "comfobox_mqtt"
-version: "1.0.4"
+version: "1.0.5"
 description: "Zehnder ComfoBox Series 5 (ELESTA) RS485/BACnet → MQTT Bridge"
 url: "https://github.com/ptpat/ha-comfobox-mqtt-addon"
 
