@@ -1,11 +1,10 @@
-FROM debian:bookworm-slim
+FROM mono:6.12.0.200-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     unzip \
     socat \
     jq \
-    mono-complete \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
