@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[INFO] run.sh v4 (inspect config structure) starting"
+echo "[INFO] run.sh v5 (fix config order + appSettings rebuild) starting"
 
+# ---- Read HA add-on options ----
 WAVESHARE_HOST="$(jq -r '.waveshare_host' /data/options.json)"
 WAVESHARE_PORT="$(jq -r '.waveshare_port' /data/options.json)"
 SERIAL_PORT="$(jq -r '.serial_port' /data/options.json)"
@@ -19,12 +20,14 @@ echo "[INFO] waveshare=${WAVESHARE_HOST}:${WAVESHARE_PORT}"
 echo "[INFO] serial=${SERIAL_PORT} baud=${BAUDRATE}"
 echo "[INFO] mqtt=${MQTT_HOST}:${MQTT_PORT} user_set=$([ -n "${MQTT_USER}" ] && [ "${MQTT_USER}" != "null" ] && echo yes || echo no)"
 
+# ---- Start socat ----
 if [ "${USE_SOCAT}" = "true" ]; then
   echo "[INFO] Starting socat..."
   socat -d -d "pty,raw,echo=0,link=${SERIAL_PORT}" "tcp:${WAVESHARE_HOST}:${WAVESHARE_PORT}" &
   sleep 2
 fi
 
+# ---- Locate RF77 console ----
 BASE_DIR="/app/ComfoBox2Mqtt"
 EXE="${BASE_DIR}/ComfoBoxMqttConsole.exe"
 CFG="${BASE_DIR}/ComfoBoxMqttConsole.exe.config"
@@ -35,44 +38,46 @@ if [ ! -f "${EXE}" ] || [ ! -f "${CFG}" ]; then
   exit 1
 fi
 
-echo "[INFO] Patching RF77 config (best effort)..."
+echo "[INFO] Rebuilding <appSettings> safely (configSections must stay first)..."
 
-# --- ensure appSettings exists; if not, create it right after <configuration> ---
-if ! grep -q "<appSettings>" "${CFG}"; then
-  echo "[WARN] No <appSettings> found; creating <appSettings> block."
-  # Insert right after first <configuration> tag
-  sed -i '0,/<configuration>/s//<configuration>\n  <appSettings>\n  <\/appSettings>/' "${CFG}"
-fi
+# 1) Remove ANY existing appSettings blocks (they might be in the wrong place)
+#    This fixes the "configSections must be first" issue.
+sed -i '/<appSettings>/,/<\/appSettings>/d' "${CFG}"
 
-set_xml_kv() {
-  local key="$1"
-  local val="$2"
-
-  if grep -q "key=\"${key}\"" "${CFG}"; then
-    sed -i "s|<add key=\"${key}\" value=\"[^\"]*\" */>|<add key=\"${key}\" value=\"${val}\" />|g" "${CFG}"
-  else
-    sed -i "s|</appSettings>|  <add key=\"${key}\" value=\"${val}\" />\n</appSettings>|" "${CFG}"
+# 2) Build a fresh appSettings block in a temp file
+TMP_APP="/tmp/appsettings.xml"
+{
+  echo "  <appSettings>"
+  echo "    <add key=\"SerialPort\" value=\"${SERIAL_PORT}\" />"
+  echo "    <add key=\"Baudrate\" value=\"${BAUDRATE}\" />"
+  echo "    <add key=\"MqttHost\" value=\"${MQTT_HOST}\" />"
+  echo "    <add key=\"MqttPort\" value=\"${MQTT_PORT}\" />"
+  if [ -n "${MQTT_USER}" ] && [ "${MQTT_USER}" != "null" ]; then
+    echo "    <add key=\"MqttUser\" value=\"${MQTT_USER}\" />"
   fi
-}
+  if [ -n "${MQTT_PASS}" ] && [ "${MQTT_PASS}" != "null" ]; then
+    echo "    <add key=\"MqttPassword\" value=\"${MQTT_PASS}\" />"
+  fi
+  echo "  </appSettings>"
+} > "${TMP_APP}"
 
-set_xml_kv "SerialPort" "${SERIAL_PORT}"
-set_xml_kv "Baudrate" "${BAUDRATE}"
-set_xml_kv "MqttHost" "${MQTT_HOST}"
-set_xml_kv "MqttPort" "${MQTT_PORT}"
-
-if [ -n "${MQTT_USER}" ] && [ "${MQTT_USER}" != "null" ]; then
-  set_xml_kv "MqttUser" "${MQTT_USER}"
+# 3) Insert the appSettings in the correct place:
+#    after </configSections> if it exists; otherwise right after <configuration>
+if grep -q "</configSections>" "${CFG}"; then
+  # Insert after closing configSections
+  sed -i "/<\/configSections>/r ${TMP_APP}" "${CFG}"
+else
+  # Insert after <configuration> opening tag
+  sed -i "/<configuration>/r ${TMP_APP}" "${CFG}"
 fi
-if [ -n "${MQTT_PASS}" ] && [ "${MQTT_PASS}" != "null" ]; then
-  set_xml_kv "MqttPassword" "${MQTT_PASS}"
-fi
 
+# 4) Debug: show structure markers + redact password
 echo "-----------------------------------------"
-echo "[DEBUG] CFG structural markers (line numbers):"
-grep -n -E "<configuration>|</configuration>|<appSettings>|</appSettings>|<applicationSettings>|</applicationSettings>|<userSettings>|</userSettings>" "${CFG}" || true
+echo "[DEBUG] CFG markers:"
+grep -n -E "<configuration>|</configuration>|<configSections>|</configSections>|<appSettings>|</appSettings>" "${CFG}" || true
 echo "-----------------------------------------"
-echo "[DEBUG] All <add ...> lines (password redacted):"
-sed -E 's/(key="(MqttPassword|Password)" value=")[^"]*"/\1***"/g' "${CFG}" | grep -n "<add " || true
+echo "[DEBUG] appSettings (password redacted):"
+sed -E 's/(key="MqttPassword" value=")[^"]*"/\1***"/g' "${CFG}" | grep -n -E "<appSettings>|</appSettings>|<add key=" || true
 echo "-----------------------------------------"
 
 echo "[INFO] Starting ComfoBoxMqttConsole..."
