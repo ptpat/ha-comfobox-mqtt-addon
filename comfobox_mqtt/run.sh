@@ -84,9 +84,17 @@ fi
 if [ -f "$CFG" ]; then
   echo "[INFO] Patching config"
 
+  # MQTT Host
   sed -i "s|<value>localhost</value>|<value>${mqtt_host}</value>|g" "$CFG" || true
+
+  # Serial Port
   sed -i "s|<value>COM8</value>|<value>${serial_port}</value>|g" "$CFG" || true
+
+  # Baudrate
   sed -i "s|<value>76800</value>|<value>${baudrate}</value>|g" "$CFG" || true
+
+  # --- NEU: BacnetMasterId auf 11 setzen ---
+  sed -i '/BacnetMasterId/{n;s|<value>.*</value>|<value>11</value>|}' "$CFG" || true
 fi
 
 echo "[INFO] Starting ComfoBoxMqttConsole"
