@@ -1,34 +1,25 @@
-#!/usr/bin/with-contenv bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-WAVESHARE_HOST="$(bashio::config 'waveshare_host')"
-WAVESHARE_PORT="$(bashio::config 'waveshare_port')"
-SERIAL_PORT="$(bashio::config 'serial_port')"
-BAUDRATE="$(bashio::config 'baudrate')"
+WAVESHARE_HOST="$(jq -r '.waveshare_host' /data/options.json)"
+WAVESHARE_PORT="$(jq -r '.waveshare_port' /data/options.json)"
+SERIAL_PORT="$(jq -r '.serial_port' /data/options.json)"
+BAUDRATE="$(jq -r '.baudrate' /data/options.json)"
+MQTT_HOST="$(jq -r '.mqtt_host' /data/options.json)"
+MQTT_PORT="$(jq -r '.mqtt_port' /data/options.json)"
+MQTT_USER="$(jq -r '.mqtt_user' /data/options.json)"
+MQTT_PASS="$(jq -r '.mqtt_pass' /data/options.json)"
+USE_SOCAT="$(jq -r '.use_socat' /data/options.json)"
 
-MQTT_HOST="$(bashio::config 'mqtt_host')"
-MQTT_PORT="$(bashio::config 'mqtt_port')"
-MQTT_USER="$(bashio::config 'mqtt_user')"
-MQTT_PASS="$(bashio::config 'mqtt_pass')"
+echo "[INFO] waveshare=${WAVESHARE_HOST}:${WAVESHARE_PORT} serial=${SERIAL_PORT} baud=${BAUDRATE} mqtt=${MQTT_HOST}:${MQTT_PORT}"
 
-bashio::log.info "waveshare=${WAVESHARE_HOST}:${WAVESHARE_PORT} serial=${SERIAL_PORT} baud=${BAUDRATE} mqtt=${MQTT_HOST}:${MQTT_PORT}"
-
-# 1) Optional socat: TCP->PTY (dein Waveshare)
-if bashio::config.true 'use_socat'; then
-  bashio::log.info "Starting socat..."
-  socat -d -d pty,raw,echo=0,link="${SERIAL_PORT}" "tcp:${WAVESHARE_HOST}:${WAVESHARE_PORT}" &
+if [ "${USE_SOCAT}" = "true" ]; then
+  echo "[INFO] Starting socat..."
+  socat -d -d "pty,raw,echo=0,link=${SERIAL_PORT}" "tcp:${WAVESHARE_HOST}:${WAVESHARE_PORT}" &
+  sleep 2
 fi
 
-# 2) In den RF77-Ordner wechseln
 cd /app/ComfoBox2Mqtt
 
-# 3) Prüfen, ob exe + config da sind
-if [ ! -f "ComfoBoxMqttConsole.exe" ] || [ ! -f "ComfoBoxMqttConsole.exe.config" ]; then
-  bashio::log.error "RF77 files not found in /app/ComfoBox2Mqtt"
-  ls -la /app
-  ls -la /app/ComfoBox2Mqtt || true
-  exit 1
-fi
-
-bashio::log.info "Starting ComfoBoxMqttConsole..."
-exec mono ComfoBoxMqttConsole.exe
+echo "[INFO] Starting ComfoBoxMqttConsole..."
+exec mono ./ComfoBoxMqttConsole.exe
