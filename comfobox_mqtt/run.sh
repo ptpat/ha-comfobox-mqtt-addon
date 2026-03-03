@@ -1,7 +1,7 @@
 #!/usr/bin/with-contenv bashio
 set -euo pipefail
 
-echo "[INFO] run.sh v7 (patch applicationSettings + socat + start mono) starting"
+echo "[INFO] run.sh v8 (robust socat PTY + patch applicationSettings + start mono) starting"
 
 # --- Read add-on options ---
 USE_SOCAT="$(bashio::config 'use_socat')"
@@ -29,8 +29,7 @@ CONSOLE_DIR=""
 if [[ -d "${APP_DIR}/ComfoBox2Mqtt" ]]; then
   CONSOLE_DIR="${APP_DIR}/ComfoBox2Mqtt"
 else
-  # try to find it
-  CANDIDATE="$(find "${APP_DIR}" -maxdepth 3 -type f -name "ComfoBoxMqttConsole.exe" -print -quit 2>/dev/null || true)"
+  CANDIDATE="$(find "${APP_DIR}" -maxdepth 4 -type f -name "ComfoBoxMqttConsole.exe" -print -quit 2>/dev/null || true)"
   if [[ -n "${CANDIDATE}" ]]; then
     CONSOLE_DIR="$(dirname "${CANDIDATE}")"
   fi
@@ -45,8 +44,16 @@ fi
 echo "[INFO] Found console in: ${CONSOLE_DIR}"
 
 CFG="${CONSOLE_DIR}/ComfoBoxMqttConsole.exe.config"
+EXE="${CONSOLE_DIR}/ComfoBoxMqttConsole.exe"
+
 if [[ ! -f "${CFG}" ]]; then
   echo "[ERROR] Config not found: ${CFG}"
+  ls -la "${CONSOLE_DIR}" || true
+  exit 1
+fi
+
+if [[ ! -f "${EXE}" ]]; then
+  echo "[ERROR] EXE not found: ${EXE}"
   ls -la "${CONSOLE_DIR}" || true
   exit 1
 fi
@@ -56,8 +63,6 @@ patch_app_setting() {
   local file="$1"
   local setting="$2"
   local new_value="$3"
-
-  # escape & for awk replacement
   local safe_value="${new_value//&/\\&}"
 
   awk -v setting="$setting" -v value="$safe_value" '
@@ -69,31 +74,37 @@ patch_app_setting() {
       patched=1
     }
     { print }
-    END {
-      if (patched==0) {
-        # Not fatal — some settings may not exist in some RF77 versions
-      }
-    }
   ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
 }
 
-# --- Helper: patch/create appSettings block (legacy) ---
-patch_appsettings_block() {
+# --- Helper: ensure appSettings exists and rebuild it (legacy; harmless but keeps consistency) ---
+rebuild_appsettings_block() {
   local file="$1"
 
-  # If no <appSettings>, add a minimal block right after </configSections>
+  # If no <appSettings>, add minimal block right after </configSections> if present, else after <configuration>
   if ! grep -q "<appSettings>" "$file"; then
-    awk '
-      { print }
-      /<\/configSections>/ && inserted==0 {
-        print "  <appSettings>"
-        print "  </appSettings>"
-        inserted=1
-      }
-    ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+    if grep -q "</configSections>" "$file"; then
+      awk '
+        { print }
+        /<\/configSections>/ && inserted==0 {
+          print "  <appSettings>"
+          print "  </appSettings>"
+          inserted=1
+        }
+      ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+    else
+      awk '
+        { print }
+        /<configuration>/ && inserted==0 {
+          print "  <appSettings>"
+          print "  </appSettings>"
+          inserted=1
+        }
+      ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+    fi
   fi
 
-  # Now rebuild <appSettings> content safely
+  # Rebuild the entire <appSettings> content
   awk -v serial="${SERIAL_PORT}" \
       -v baud="${BAUDRATE}" \
       -v mh="${MQTT_HOST}" \
@@ -123,26 +134,39 @@ patch_appsettings_block() {
 
 echo "[INFO] Patching RF77 config: ${CFG}"
 
-# 1) Patch the real RF77 settings (applicationSettings) — THIS is the key fix
-patch_app_setting "${CFG}" "MqttBrokerAddress" "${MQTT_HOST}"
-patch_app_setting "${CFG}" "MqttPort" "${MQTT_PORT}"
+# --- Patch the REAL RF77 settings (applicationSettings) ---
+# Serial
 patch_app_setting "${CFG}" "Port" "${SERIAL_PORT}"
 patch_app_setting "${CFG}" "Baudrate" "${BAUDRATE}"
 
-# 2) Also patch legacy appSettings (harmless, but keeps things consistent)
-patch_appsettings_block "${CFG}"
+# MQTT (RF77 uses MqttBrokerAddress; some builds also have MqttPort but yours currently not shown)
+patch_app_setting "${CFG}" "MqttBrokerAddress" "${MQTT_HOST}"
+patch_app_setting "${CFG}" "MqttPort" "${MQTT_PORT}"
 
-# --- Start socat (if enabled) ---
+# --- Also keep legacy appSettings consistent ---
+rebuild_appsettings_block "${CFG}"
+
+# --- Start socat (robust PTY) ---
+SOCAT_PID=""
 if [[ "${USE_SOCAT}" == "true" ]]; then
-  echo "[INFO] Starting socat..."
-  # Create PTY and link it to SERIAL_PORT
-  socat -d -d \
-    pty,raw,echo=0,link="${SERIAL_PORT}",mode=666 \
-    "tcp:${WAVESHARE_HOST}:${WAVESHARE_PORT}" &
-  SOCAT_PID=$!
+  if [[ -z "${WAVESHARE_HOST}" || -z "${WAVESHARE_PORT}" ]]; then
+    echo "[ERROR] use_socat=true but waveshare_host/port missing"
+    exit 1
+  fi
 
-  # give socat a moment
+  echo "[INFO] Starting socat (robust PTY)..."
+  # rawer + waitslave makes PTY behave more like a real serial port for Mono SerialPort
+  socat -d -d \
+    "PTY,link=${SERIAL_PORT},rawer,echo=0,waitslave,mode=666" \
+    "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},nodelay" &
+  SOCAT_PID="$!"
+
   sleep 2
+
+  echo "[DEBUG] serial link:"
+  ls -l "${SERIAL_PORT}" || true
+  echo "[DEBUG] /dev/pts:"
+  ls -l /dev/pts || true
 
   if ! kill -0 "${SOCAT_PID}" 2>/dev/null; then
     echo "[ERROR] socat failed to start"
@@ -152,11 +176,10 @@ else
   echo "[WARN] use_socat=false, not starting socat"
 fi
 
-# --- Quick debug dump (redact password) ---
+# --- Debug dump (redact password) ---
 echo "-----------------------------------------"
-echo "[DEBUG] applicationSettings (relevant lines, password redacted):"
-grep -nE 'setting name="(MqttBrokerAddress|MqttPort|Port|Baudrate)"|<value>' "${CFG}" \
-  | sed -E 's/(MqttPassword".*<value>)[^<]*/\1*** /' || true
+echo "[DEBUG] applicationSettings (relevant lines):"
+grep -nE 'setting name="(MqttBrokerAddress|MqttPort|Port|Baudrate)"|<value>' "${CFG}" || true
 echo "-----------------------------------------"
 echo "[DEBUG] appSettings (password redacted):"
 grep -nE '<appSettings>|</appSettings>|<add key="(SerialPort|Baudrate|MqttHost|MqttPort|MqttUser|MqttPassword)"' "${CFG}" \
