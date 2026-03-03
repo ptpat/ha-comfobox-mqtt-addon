@@ -1,18 +1,22 @@
-FROM mono:6.12-slim
+ARG BUILD_FROM
+FROM $BUILD_FROM
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    unzip \
-    socat \
-    jq \
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+     mono-complete \
+     socat \
+     ca-certificates \
+     tzdata \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY ComfoBox2Mqtt_0.4.0.zip /app/
-RUN unzip ComfoBox2Mqtt_0.4.0.zip && rm ComfoBox2Mqtt_0.4.0.zip
+# App-Dateien rein
+COPY . /app
 
-COPY run.sh /run.sh
-RUN chmod +x /run.sh
+# run.sh ausführbar machen
+RUN chmod +x /app/run.sh
 
-CMD ["/run.sh"]
+CMD ["/app/run.sh"]
