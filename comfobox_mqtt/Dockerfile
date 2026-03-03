@@ -1,9 +1,7 @@
-ARG BUILD_FROM
+ARG BUILD_FROM=ghcr.io/hassio-addons/base:19.0.0
 FROM ${BUILD_FROM}
 
-# Alpine default shell exists (/bin/sh). Do NOT switch to bash here.
-SHELL ["/bin/sh", "-o", "pipefail", "-c"]
-
+# Install runtime deps
 RUN set -eux; \
   apk add --no-cache \
     bash \
@@ -14,8 +12,9 @@ RUN set -eux; \
     icu-libs \
     libstdc++ \
     libgcc \
+    jq \
   ; \
-  # mono sometimes only in edge/community
+  # Mono (Alpine): from edge repositories
   apk add --no-cache \
     --repository=https://dl-cdn.alpinelinux.org/alpine/edge/main \
     --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community \
@@ -25,12 +24,9 @@ RUN set -eux; \
 
 WORKDIR /app
 
-COPY ComfoBox2Mqtt_0.4.0.zip /app/ComfoBox2Mqtt_0.4.0.zip
-COPY run.sh /app/run.sh
+# Copy everything from add-on directory
+COPY . /app
 
-RUN chmod +x /app/run.sh \
-  && rm -rf /app/ComfoBox2Mqtt \
-  && unzip -q /app/ComfoBox2Mqtt_0.4.0.zip -d /app \
-  && test -f /app/ComfoBox2Mqtt/ComfoBoxMqttConsole.exe
+RUN chmod +x /app/run.sh
 
 CMD ["/app/run.sh"]
