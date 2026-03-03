@@ -1,4 +1,4 @@
-FROM mono:6.12.0.200-slim
+FROM mono:6.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
