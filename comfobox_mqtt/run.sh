@@ -21,24 +21,30 @@ if [ "${USE_SOCAT}" = "true" ]; then
   sleep 2
 fi
 
-# 2) Config-Datei patchen (XML config)
-CFG="ComfoBoxMqttConsole.exe.config"
+# 2) RF77 Dateien suchen (sie liegen bei dir unter /app/ComfoBox2Mqtt)
+BASE_DIR="/app/ComfoBox2Mqtt"
+EXE="${BASE_DIR}/ComfoBoxMqttConsole.exe"
+CFG="${BASE_DIR}/ComfoBoxMqttConsole.exe.config"
 
-if [ ! -f "${CFG}" ]; then
-  echo "[ERROR] ${CFG} not found in /app"
-  ls -la
+if [ ! -f "${EXE}" ] || [ ! -f "${CFG}" ]; then
+  echo "[ERROR] RF77 console files not found where expected."
+  echo "[ERROR] Expected:"
+  echo "  ${EXE}"
+  echo "  ${CFG}"
+  echo "[INFO] Directory listing of /app:"
+  ls -la /app
+  echo "[INFO] Directory listing of ${BASE_DIR} (if exists):"
+  ls -la "${BASE_DIR}" || true
   exit 1
 fi
 
-# SerialPort setzen
+# 3) Config patchen (XML config) – Keys müssen existieren; wenn nicht, sehen wir das im nächsten Log
 sed -i "s|<add key=\"SerialPort\" value=\"[^\"]*\" />|<add key=\"SerialPort\" value=\"${SERIAL_PORT}\" />|g" "${CFG}"
-# Baudrate setzen
 sed -i "s|<add key=\"Baudrate\" value=\"[^\"]*\" />|<add key=\"Baudrate\" value=\"${BAUDRATE}\" />|g" "${CFG}"
-# MQTT Host/Port setzen
 sed -i "s|<add key=\"MqttHost\" value=\"[^\"]*\" />|<add key=\"MqttHost\" value=\"${MQTT_HOST}\" />|g" "${CFG}"
 sed -i "s|<add key=\"MqttPort\" value=\"[^\"]*\" />|<add key=\"MqttPort\" value=\"${MQTT_PORT}\" />|g" "${CFG}"
 
-# MQTT User/Pass optional (nur setzen wenn nicht leer)
+# Optional User/Pass nur wenn gesetzt
 if [ -n "${MQTT_USER}" ] && [ "${MQTT_USER}" != "null" ]; then
   sed -i "s|<add key=\"MqttUser\" value=\"[^\"]*\" />|<add key=\"MqttUser\" value=\"${MQTT_USER}\" />|g" "${CFG}"
 fi
@@ -46,6 +52,6 @@ if [ -n "${MQTT_PASS}" ] && [ "${MQTT_PASS}" != "null" ]; then
   sed -i "s|<add key=\"MqttPassword\" value=\"[^\"]*\" />|<add key=\"MqttPassword\" value=\"${MQTT_PASS}\" />|g" "${CFG}"
 fi
 
-# 3) Start
 echo "[INFO] Starting ComfoBoxMqttConsole..."
-exec mono /app/ComfoBoxMqttConsole.exe
+cd "${BASE_DIR}"
+exec mono "./ComfoBoxMqttConsole.exe"
