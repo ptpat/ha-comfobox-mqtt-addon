@@ -1,5 +1,5 @@
 name: "ComfoBox MQTT Bridge"
-version: "1.0.36"
+version: "1.0.37"
 slug: "comfobox_mqtt"
 description: "Bridge Zehnder ComfoBox (RF77 ComfoBox2Mqtt) via TCP-Serial (Waveshare) to MQTT"
 url: "https://github.com/ptpat/ha-comfobox-mqtt-addon"
@@ -19,8 +19,8 @@ options:
   use_socat: true
 
   # Platzhalter (müssen gültig zum schema sein, sind aber absichtlich "leer")
-  waveshare_host: "IP Adress"
-  waveshare_port: 4197
+  waveshare_host: ""
+  waveshare_port: ""
 
   serial_port: "/tmp/comfobox"
   baudrate: 76800
