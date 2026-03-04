@@ -14,23 +14,27 @@ startup: services
 boot: auto
 init: false
 
+# Neutrale Defaults: UI soll entscheiden.
 options:
   use_socat: true
 
-  waveshare_host: ""
-  waveshare_port: 0
+  # Platzhalter (müssen gültig zum schema sein, sind aber absichtlich "leer")
+  waveshare_host: "CHANGEME"
+  waveshare_port: 4197
 
   serial_port: "/tmp/comfobox"
   baudrate: 38400
 
   mqtt_host: "core-mosquitto"
   mqtt_port: 1883
-  mqtt_user: ""
-  mqtt_pass: ""
+  mqtt_user: null
+  mqtt_pass: null
   mqtt_base_topic: "ComfoBox"
 
-  bacnet_master_id: 11
-  bacnet_client_id: 3
+  # IDs als Defaults sind okay, aber wenn du sie NUR in der UI setzen willst:
+  # setze hier neutrale Werte, die du in der UI überschreibst.
+  bacnet_master_id: 0
+  bacnet_client_id: 0
 
 schema:
   use_socat: bool
