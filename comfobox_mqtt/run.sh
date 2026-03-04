@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[INFO] run.sh (jq + unzip + patch + mono) starting"
+echo "[INFO] run.sh (jq + unzip + socat TCP->PTY + ln -sf + patch + mono) starting"
 
 OPTIONS_JSON="/data/options.json"
 
@@ -81,6 +81,52 @@ patch_setting_value_multiline() {
   sed -i -E "/setting name=\"$name\"/,/<\/setting>/ s|<value>[^<]*</value>|<value>${newval}</value>|" "$file" || true
 }
 
+SOCAT_PID=""
+cleanup() {
+  if [ -n "${SOCAT_PID}" ]; then
+    kill "${SOCAT_PID}" >/dev/null 2>&1 || true
+    wait "${SOCAT_PID}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+# --- Start socat and create /tmp/comfobox (without socat link=) ---
+if [ "$use_socat" = "true" ]; then
+  if [ -z "$waveshare_host" ] || [ "$waveshare_port" = "0" ]; then
+    echo "[ERROR] use_socat=true but waveshare_host/port not configured"
+    exit 1
+  fi
+
+  echo "[INFO] Starting socat (TCP->PTY) in background..."
+  SOCAT_LOG="/tmp/socat.log"
+  rm -f "$SOCAT_LOG" >/dev/null 2>&1 || true
+
+  (socat -d -d "TCP:${waveshare_host}:${waveshare_port},keepalive,nodelay" "PTY,raw,echo=0,waitslave" 2>"$SOCAT_LOG") &
+  SOCAT_PID="$!"
+
+  PTY=""
+  for _ in $(seq 1 50); do
+    PTY="$(grep -oE '/dev/pts/[0-9]+' "$SOCAT_LOG" | head -n1 || true)"
+    if [ -n "$PTY" ] && [ -c "$PTY" ]; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  if [ -z "$PTY" ]; then
+    echo "[ERROR] Could not detect PTY from socat log"
+    tail -n 80 "$SOCAT_LOG" || true
+    exit 1
+  fi
+
+  echo "[INFO] Detected PTY: $PTY"
+  echo "[INFO] Creating symlink: ${serial_port} -> ${PTY}"
+  rm -f "${serial_port}" >/dev/null 2>&1 || true
+  ln -sf "${PTY}" "${serial_port}" || true
+  ls -la "${serial_port}" || true
+fi
+
+# --- Patch RF77 config ---
 if [ -f "$CFG" ]; then
   echo "[INFO] Patching RF77 config"
 
@@ -96,6 +142,5 @@ fi
 
 cd "$APPDIR"
 
-# First: keep it simple – start mono directly (we'll reintroduce socat/PTY binding only if needed)
 echo "[INFO] Starting ComfoBoxMqttConsole"
 exec mono "$EXE_PATH"
