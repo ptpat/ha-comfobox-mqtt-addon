@@ -1,5 +1,5 @@
 name: "ComfoBox MQTT Bridge"
-version: "1.0.35"
+version: "1.0.36"
 slug: "comfobox_mqtt"
 description: "Bridge Zehnder ComfoBox (RF77 ComfoBox2Mqtt) via TCP-Serial (Waveshare) to MQTT"
 url: "https://github.com/ptpat/ha-comfobox-mqtt-addon"
@@ -23,7 +23,7 @@ options:
   waveshare_port: 4197
 
   serial_port: "/tmp/comfobox"
-  baudrate: 38400
+  baudrate: 76800
 
   mqtt_host: "core-mosquitto"
   mqtt_port: 1883
