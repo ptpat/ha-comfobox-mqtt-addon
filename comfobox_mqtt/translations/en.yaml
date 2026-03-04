@@ -1,1 +1,34 @@
+configuration:
+  use_socat:
+    name: Use socat TCP->PTY bridge
+    description: Enable when using a Waveshare TCP-to-Serial gateway.
+  waveshare_host:
+    name: Waveshare host / IP
+  waveshare_port:
+    name: Waveshare TCP port
+  serial_port:
+    name: Serial port (PTY path)
+    description: Path created by socat inside the add-on (e.g. /tmp/comfobox).
+  baudrate:
+    name: Baudrate
+    description: RS485/MSTP baudrate (typical 38400).
 
+  mqtt_host:
+    name: MQTT host
+    description: Usually core-mosquitto (Supervisor add-on).
+  mqtt_port:
+    name: MQTT port
+  mqtt_user:
+    name: MQTT username
+  mqtt_pass:
+    name: MQTT password
+  mqtt_base_topic:
+    name: MQTT base topic
+    description: Root topic used by RF77 (default ComfoBox).
+
+  bacnet_master_id:
+    name: BACnet Master Device ID
+    description: DeviceId reported by the ComfoBox master (e.g. 11).
+  bacnet_client_id:
+    name: BACnet Client ID
+    description: ClientId used by the bridge on the MSTP bus (default 3).
