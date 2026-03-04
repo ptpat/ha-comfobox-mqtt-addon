@@ -1,98 +1,127 @@
-#!/usr/bin/env bash
+#!/usr/bin/with-contenv bash
 set -euo pipefail
 
-echo "[INFO] run.sh (Baseline: unzip + patch + socat EXEC mono with controlling TTY) starting"
+echo "[INFO] run.sh baseline (bashio + socat PTY without link= + patch + mono) starting"
 
-OPTIONS_JSON="/data/options.json"
+USE_SOCAT="$(bashio::config 'use_socat' || echo 'true')"
+WAVESHARE_HOST="$(bashio::config 'waveshare_host' || echo '')"
+WAVESHARE_PORT="$(bashio::config 'waveshare_port' || echo '0')"
 
-get_opt() {
-  local key="$1"
-  local def="${2:-}"
-  if command -v jq >/dev/null 2>&1; then
-    local val
-    val="$(jq -r --arg k "$key" '.[$k] // empty' "$OPTIONS_JSON" 2>/dev/null || true)"
-    if [ -n "$val" ] && [ "$val" != "null" ]; then
-      echo "$val"
-      return
+SERIAL_PORT="$(bashio::config 'serial_port' || echo '/tmp/comfobox')"
+BAUDRATE="$(bashio::config 'baudrate' || echo '38400')"
+
+MQTT_HOST="$(bashio::config 'mqtt_host' || echo 'core-mosquitto')"
+MQTT_PORT="$(bashio::config 'mqtt_port' || echo '1883')"
+MQTT_USER="$(bashio::config 'mqtt_user' || echo '')"
+MQTT_PASS="$(bashio::config 'mqtt_pass' || echo '')"
+MQTT_BASE_TOPIC="$(bashio::config 'mqtt_base_topic' || echo 'ComfoBox')"
+
+BACNET_MASTER_ID="$(bashio::config 'bacnet_master_id' || echo '1')"
+BACNET_CLIENT_ID="$(bashio::config 'bacnet_client_id' || echo '3')"
+
+USER_SET="no"
+if [[ -n "${MQTT_USER}" ]]; then USER_SET="yes"; fi
+
+echo "[INFO] waveshare=${WAVESHARE_HOST}:${WAVESHARE_PORT}"
+echo "[INFO] serial=${SERIAL_PORT} baud=${BAUDRATE}"
+echo "[INFO] mqtt=${MQTT_HOST}:${MQTT_PORT} user_set=${USER_SET}"
+echo "[INFO] mqtt_base_topic=${MQTT_BASE_TOPIC}"
+echo "[INFO] bacnet_master_id=${BACNET_MASTER_ID} bacnet_client_id=${BACNET_CLIENT_ID}"
+
+APPDIR="/app"
+CONSOLE_DIR=""
+
+if [[ -f "${APPDIR}/rf77/ComfoBox2Mqtt/ComfoBoxMqttConsole.exe" ]]; then
+  CONSOLE_DIR="${APPDIR}/rf77/ComfoBox2Mqtt"
+elif [[ -f "${APPDIR}/ComfoBox2Mqtt/ComfoBoxMqttConsole.exe" ]]; then
+  CONSOLE_DIR="${APPDIR}/ComfoBox2Mqtt"
+elif [[ -f "${APPDIR}/ComfoBoxMqttConsole.exe" ]]; then
+  CONSOLE_DIR="${APPDIR}"
+else
+  echo "[ERROR] ComfoBoxMqttConsole.exe not found. Listing /app:"
+  ls -lah "${APPDIR}" || true
+  exit 1
+fi
+
+echo "[INFO] Found console in: ${CONSOLE_DIR}"
+CFG="${CONSOLE_DIR}/ComfoBoxMqttConsole.exe.config"
+
+if [[ ! -f "${CFG}" ]]; then
+  echo "[ERROR] ${CFG} not found"
+  ls -lah "${CONSOLE_DIR}" || true
+  exit 1
+fi
+
+SOCAT_PID=""
+
+cleanup() {
+  echo "[INFO] Shutting down..."
+  if [[ -n "${SOCAT_PID}" ]]; then
+    kill "${SOCAT_PID}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+# Start socat and create /tmp/comfobox symlink ourselves (no socat link=)
+if [[ "${USE_SOCAT}" == "true" ]]; then
+  if [[ -z "${WAVESHARE_HOST}" || "${WAVESHARE_PORT}" == "0" ]]; then
+    echo "[ERROR] use_socat=true but waveshare_host/port not set"
+    exit 1
+  fi
+
+  echo "[INFO] Starting socat (TCP -> PTY)..."
+  SOCAT_LOG="/tmp/socat.log"
+  rm -f "${SOCAT_LOG}" || true
+
+  # Run socat in background; capture stderr to file so we can extract PTY
+  (socat -d -d \
+      "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay" \
+      "PTY,rawer,echo=0,waitslave" \
+    2> >(tee "${SOCAT_LOG}" >&2)) &
+
+  SOCAT_PID="$!"
+
+  # Wait for PTY path to appear
+  PTY=""
+  for _ in $(seq 1 50); do
+    PTY="$(grep -Eo '/dev/pts/[0-9]+' "${SOCAT_LOG}" | head -n1 || true)"
+    if [[ -n "${PTY}" && -c "${PTY}" ]]; then
+      break
     fi
+    sleep 0.1
+  done
+
+  if [[ -z "${PTY}" ]]; then
+    echo "[ERROR] Could not detect PTY from socat log"
+    tail -n 80 "${SOCAT_LOG}" || true
+    exit 1
   fi
-  echo "$def"
-}
 
-use_socat="$(get_opt use_socat "true")"
-waveshare_host="$(get_opt waveshare_host "")"
-waveshare_port="$(get_opt waveshare_port "0")"
-
-baudrate="$(get_opt baudrate "76800")"
-
-mqtt_host="$(get_opt mqtt_host "core-mosquitto")"
-mqtt_base_topic="$(get_opt mqtt_base_topic "ComfoBox")"
-
-bacnet_master_id="$(get_opt bacnet_master_id "1")"
-bacnet_client_id="$(get_opt bacnet_client_id "3")"
-
-echo "[INFO] waveshare=${waveshare_host}:${waveshare_port}"
-echo "[INFO] baud=${baudrate}"
-echo "[INFO] mqtt=${mqtt_host}"
-echo "[INFO] mqtt_base_topic=${mqtt_base_topic}"
-echo "[INFO] bacnet_master_id=${bacnet_master_id} bacnet_client_id=${bacnet_client_id}"
-
-ZIP="/app/ComfoBox2Mqtt_0.4.0.zip"
-if [ ! -f "$ZIP" ]; then
-  echo "[ERROR] ZIP not found at $ZIP"
-  exit 1
+  echo "[INFO] Detected PTY: ${PTY}"
+  echo "[INFO] Creating symlink: ${SERIAL_PORT} -> ${PTY}"
+  rm -f "${SERIAL_PORT}" 2>/dev/null || true
+  ln -sf "${PTY}" "${SERIAL_PORT}" || true
+  ls -lah "${SERIAL_PORT}" || true
 fi
 
-rm -rf /app/rf77
-mkdir -p /app/rf77
-unzip -o "$ZIP" -d /app/rf77 >/dev/null
+echo "[INFO] Patching RF77 config: ${CFG}"
 
-EXE_PATH="$(find /app/rf77 -type f -name "ComfoBoxMqttConsole.exe" | head -n1 || true)"
-if [ -z "$EXE_PATH" ]; then
-  echo "[ERROR] ComfoBoxMqttConsole.exe not found after unzip"
-  exit 1
-fi
-
-CFG="${EXE_PATH}.config"
-APPDIR="$(dirname "$EXE_PATH")"
-cd "$APPDIR"
-
-patch_setting_value_multiline() {
+# Patch applicationSettings (ComfoBoxLib/ComfoBoxMqtt) – multiline-safe
+patch_setting_value() {
   local name="$1"
-  local newval="$2"
+  local val="$2"
   local file="$3"
-  if ! grep -q "setting name=\"$name\"" "$file" 2>/dev/null; then
-    return 0
-  fi
-  sed -i -E "/setting name=\"$name\"/,/<\/setting>/ s|<value>[^<]*</value>|<value>${newval}</value>|" "$file" || true
+  sed -i -E "/setting name=\"${name}\"/,/<\/setting>/ s|<value>[^<]*</value>|<value>${val}</value>|" "${file}" || true
 }
 
-if [ -f "$CFG" ]; then
-  echo "[INFO] Patching config"
+patch_setting_value "Port" "${SERIAL_PORT}" "${CFG}"
+patch_setting_value "Baudrate" "${BAUDRATE}" "${CFG}"
+patch_setting_value "BacnetMasterId" "${BACNET_MASTER_ID}" "${CFG}"
+patch_setting_value "BacnetClientId" "${BACNET_CLIENT_ID}" "${CFG}"
+patch_setting_value "MqttBrokerAddress" "${MQTT_HOST}" "${CFG}"
+patch_setting_value "BaseTopic" "${MQTT_BASE_TOPIC}" "${CFG}"
+patch_setting_value "WriteTopicsToFile" "False" "${CFG}"
 
-  patch_setting_value_multiline "Baudrate" "${baudrate}" "$CFG"
-  patch_setting_value_multiline "BacnetMasterId" "${bacnet_master_id}" "$CFG"
-  patch_setting_value_multiline "BacnetClientId" "${bacnet_client_id}" "$CFG"
-
-  patch_setting_value_multiline "WriteTopicsToFile" "False" "$CFG"
-  patch_setting_value_multiline "BaseTopic" "${mqtt_base_topic}" "$CFG"
-  patch_setting_value_multiline "MqttBrokerAddress" "${mqtt_host}" "$CFG"
-
-  # *** Key change: Port always points to the process controlling TTY ***
-  patch_setting_value_multiline "Port" "/dev/tty" "$CFG"
-fi
-
-if [ "$use_socat" != "true" ]; then
-  echo "[INFO] Starting mono (no socat)"
-  exec mono "$EXE_PATH"
-fi
-
-if [ -z "$waveshare_host" ] || [ "$waveshare_port" = "0" ]; then
-  echo "[ERROR] socat enabled but waveshare_host/port not configured"
-  exit 1
-fi
-
-echo "[INFO] Starting socat TCP<->EXEC(mono) with controlling TTY (setsid,ctty)"
-exec socat -d -d \
-  "TCP:${waveshare_host}:${waveshare_port}" \
-  "EXEC:mono '${EXE_PATH}',pty,raw,echo=0,setsid,ctty,stderr"
+echo "[INFO] Starting ComfoBoxMqttConsole"
+cd "${CONSOLE_DIR}"
+exec mono "./ComfoBoxMqttConsole.exe"
