@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[INFO] run.sh (Plan A: unzip + patch + dump-config + socat(EXEC mono with PTY)) starting"
+echo "[INFO] run.sh (Plan A: unzip + patch + dump-config + socat(EXEC mono with PTY+LINK)) starting"
 
 OPTIONS_JSON="/data/options.json"
 
@@ -73,7 +73,6 @@ echo "[INFO] RF77 detected at: $APPDIR"
 echo "[INFO] Config file: $CFG"
 
 patch_setting_value_multiline() {
-  # Replace the <value>...</value> inside a <setting name="X"> ... </setting> block
   local name="$1"
   local newval="$2"
   local file="$3"
@@ -82,14 +81,13 @@ patch_setting_value_multiline() {
     return 0
   fi
 
-  # sed range from the line containing the setting name until </setting>, then replace the first <value>...</value>
   sed -i -E "/setting name=\"$name\"/,/<\/setting>/ s|<value>[^<]*</value>|<value>${newval}</value>|" "$file" || true
 }
 
 if [ -f "$CFG" ]; then
   echo "[INFO] Patching config"
 
-  # Patch known defaults (safe)
+  # Patch defaults
   sed -i "s|<value>localhost</value>|<value>${mqtt_host}</value>|g" "$CFG" || true
   sed -i "s|<value>COM8</value>|<value>${serial_port}</value>|g" "$CFG" || true
   sed -i "s|<value>76800</value>|<value>${baudrate}</value>|g" "$CFG" || true
@@ -114,10 +112,10 @@ if [ "$use_socat" = "true" ]; then
     exit 1
   fi
 
-  echo "[INFO] Starting ComfoBoxMqttConsole via socat (PTY + EXEC mono)"
+  echo "[INFO] Starting ComfoBoxMqttConsole via socat (PTY + LINK + EXEC mono)"
   exec socat -d -d \
     "TCP:${waveshare_host}:${waveshare_port}" \
-    "EXEC:mono '${EXE_PATH}',pty,setsid,stderr"
+    "EXEC:mono '${EXE_PATH}',pty,link=${serial_port},raw,echo=0,setsid,stderr"
 fi
 
 echo "[INFO] Starting ComfoBoxMqttConsole (no socat)"
