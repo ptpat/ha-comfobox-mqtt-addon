@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[INFO] run.sh (Plan: discover PTY + ln -sf + socat EXEC mono with PTY + tail logfile) starting"
+echo "[INFO] run.sh (Baseline: unzip + patch + socat EXEC mono with controlling TTY) starting"
 
 OPTIONS_JSON="/data/options.json"
 
@@ -23,7 +23,6 @@ use_socat="$(get_opt use_socat "true")"
 waveshare_host="$(get_opt waveshare_host "")"
 waveshare_port="$(get_opt waveshare_port "0")"
 
-serial_port="$(get_opt serial_port "/tmp/comfobox")"
 baudrate="$(get_opt baudrate "76800")"
 
 mqtt_host="$(get_opt mqtt_host "core-mosquitto")"
@@ -33,7 +32,7 @@ bacnet_master_id="$(get_opt bacnet_master_id "1")"
 bacnet_client_id="$(get_opt bacnet_client_id "3")"
 
 echo "[INFO] waveshare=${waveshare_host}:${waveshare_port}"
-echo "[INFO] serial=${serial_port} baud=${baudrate}"
+echo "[INFO] baud=${baudrate}"
 echo "[INFO] mqtt=${mqtt_host}"
 echo "[INFO] mqtt_base_topic=${mqtt_base_topic}"
 echo "[INFO] bacnet_master_id=${bacnet_master_id} bacnet_client_id=${bacnet_client_id}"
@@ -70,26 +69,18 @@ patch_setting_value_multiline() {
 
 if [ -f "$CFG" ]; then
   echo "[INFO] Patching config"
+
   patch_setting_value_multiline "Baudrate" "${baudrate}" "$CFG"
   patch_setting_value_multiline "BacnetMasterId" "${bacnet_master_id}" "$CFG"
   patch_setting_value_multiline "BacnetClientId" "${bacnet_client_id}" "$CFG"
+
   patch_setting_value_multiline "WriteTopicsToFile" "False" "$CFG"
   patch_setting_value_multiline "BaseTopic" "${mqtt_base_topic}" "$CFG"
   patch_setting_value_multiline "MqttBrokerAddress" "${mqtt_host}" "$CFG"
-  patch_setting_value_multiline "Port" "${serial_port}" "$CFG"
-fi
 
-# --- NEW: Tail RF77 logfile into Add-on log for diagnosis ---
-LOGFILE="${APPDIR}/ComfoboxConsole_Log.txt"
-echo "[INFO] Tailing RF77 logfile: ${LOGFILE}"
-# Create file if it doesn't exist yet, so tail -F attaches cleanly
-touch "$LOGFILE" || true
-tail -n 0 -F "$LOGFILE" &
-TAIL_PID="$!"
-cleanup() {
-  kill "$TAIL_PID" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
+  # *** Key change: Port always points to the process controlling TTY ***
+  patch_setting_value_multiline "Port" "/dev/tty" "$CFG"
+fi
 
 if [ "$use_socat" != "true" ]; then
   echo "[INFO] Starting mono (no socat)"
@@ -101,39 +92,7 @@ if [ -z "$waveshare_host" ] || [ "$waveshare_port" = "0" ]; then
   exit 1
 fi
 
-echo "[INFO] Discovering PTY via socat..."
-SOCAT_LOG="/tmp/socat_discover.log"
-rm -f "$SOCAT_LOG" >/dev/null 2>&1 || true
-
-(socat -d -d "TCP:${waveshare_host}:${waveshare_port}" "PTY,raw,echo=0,waitslave" 2>"$SOCAT_LOG") &
-DISCOVER_PID="$!"
-
-PTY=""
-for _ in $(seq 1 50); do
-  PTY="$(grep -oE '/dev/pts/[0-9]+' "$SOCAT_LOG" | head -n1 || true)"
-  if [ -n "$PTY" ] && [ -c "$PTY" ]; then
-    break
-  fi
-  sleep 0.1
-done
-
-if [ -z "$PTY" ]; then
-  echo "[ERROR] Could not detect PTY"
-  tail -n 80 "$SOCAT_LOG" || true
-  kill "$DISCOVER_PID" >/dev/null 2>&1 || true
-  exit 1
-fi
-
-echo "[INFO] Detected PTY: $PTY"
-echo "[INFO] Creating symlink: ${serial_port} -> ${PTY}"
-rm -f "${serial_port}" >/dev/null 2>&1 || true
-ln -sf "${PTY}" "${serial_port}" || true
-ls -la "${serial_port}" || true
-
-kill "$DISCOVER_PID" >/dev/null 2>&1 || true
-wait "$DISCOVER_PID" >/dev/null 2>&1 || true
-
-echo "[INFO] Starting socat TCP<->EXEC(mono) with PTY (child gets TTY)"
+echo "[INFO] Starting socat TCP<->EXEC(mono) with controlling TTY (setsid,ctty)"
 exec socat -d -d \
   "TCP:${waveshare_host}:${waveshare_port}" \
-  "EXEC:mono '${EXE_PATH}',pty,setsid,stderr"
+  "EXEC:mono '${EXE_PATH}',pty,raw,echo=0,setsid,ctty,stderr"
