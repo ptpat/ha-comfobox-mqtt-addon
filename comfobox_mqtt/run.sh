@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[INFO] run.sh (Plan A: unzip + patch + socat(EXEC mono with PTY)) starting"
+echo "[INFO] run.sh (Plan A: unzip + patch + dump-config + socat(EXEC mono with PTY)) starting"
 
 OPTIONS_JSON="/data/options.json"
 
@@ -83,13 +83,11 @@ patch_cfg_kv() {
 }
 
 patch_setting_value() {
-  # Patch <setting name="X"...><value>...</value>
   local name="$1"
   local value="$2"
   local file="$3"
 
   if grep -q "setting name=\"$name\"" "$file" 2>/dev/null; then
-    # works across whitespace/newlines (simple, but reliable enough for this file)
     sed -i -E "s|(setting name=\"$name\"[^\n]*<value>)([^<]*)(</value>)|\1${value}\3|g" "$file" || true
   fi
 }
@@ -97,24 +95,23 @@ patch_setting_value() {
 if [ -f "$CFG" ]; then
   echo "[INFO] Patching config"
 
-  patch_cfg_kv "MqttHost" "$mqtt_host" "$CFG"
-  patch_cfg_kv "MqttPort" "$mqtt_port" "$CFG"
-  patch_cfg_kv "MqttBaseTopic" "$mqtt_base_topic" "$CFG"
-  patch_cfg_kv "SerialPort" "$serial_port" "$CFG"
-  patch_cfg_kv "Baudrate" "$baudrate" "$CFG"
-  patch_cfg_kv "BacnetMasterId" "$bacnet_master_id" "$CFG"
-  patch_cfg_kv "BacnetClientId" "$bacnet_client_id" "$CFG"
-
-  if [ -n "$mqtt_user" ]; then patch_cfg_kv "MqttUser" "$mqtt_user" "$CFG"; fi
-  if [ -n "$mqtt_pass" ]; then patch_cfg_kv "MqttPassword" "$mqtt_pass" "$CFG"; fi
-
-  # Fallbacks für RF77 Standardwerte
+  # MQTT + BaseTopic in RF77 settings (these are in <applicationSettings>, not <appSettings>)
   sed -i "s|<value>localhost</value>|<value>${mqtt_host}</value>|g" "$CFG" || true
+  sed -i "s|<value>ComfoBox</value>|<value>${mqtt_base_topic}</value>|g" "$CFG" || true
+
+  # Serial/BACnet
   sed -i "s|<value>COM8</value>|<value>${serial_port}</value>|g" "$CFG" || true
   sed -i "s|<value>76800</value>|<value>${baudrate}</value>|g" "$CFG" || true
+  patch_setting_value "BacnetMasterId" "${bacnet_master_id}" "$CFG"
+  patch_setting_value "BacnetClientId" "${bacnet_client_id}" "$CFG"
 
-  # *** EINZIGE neue Maßnahme gegen CPU-Loop: Schreiben von topics.md deaktivieren ***
+  # Disable file-writing (topics.md)
   patch_setting_value "WriteTopicsToFile" "False" "$CFG"
+
+  echo "[INFO] Dumping effective settings (post-patch):"
+  # show only the relevant settings to avoid spamming
+  grep -n -E 'setting name="(Baudrate|Port|BacnetClientId|BacnetMasterId|MqttBrokerAddress|BaseTopic|WriteTopicsToFile)"' -n "$CFG" || true
+  grep -n -E '<value>(/tmp/comfobox|192\.168\.0\.24|core-mosquitto|False|True|[0-9]{1,6})</value>' "$CFG" | head -n 80 || true
 fi
 
 cd "$APPDIR"
