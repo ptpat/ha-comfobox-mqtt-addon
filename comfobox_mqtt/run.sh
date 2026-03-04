@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[INFO] run.sh (Plan A stable unzip + socat + mono) starting"
+echo "[INFO] run.sh (Plan A: unzip + patch + socat(EXEC mono with PTY)) starting"
 
 OPTIONS_JSON="/data/options.json"
 
@@ -21,7 +21,7 @@ get_opt() {
   echo "$def"
 }
 
-# ---- Options (Home Assistant add-on config.yaml -> options.json) ----
+# ---- Options ----
 use_socat="$(get_opt use_socat "true")"
 waveshare_host="$(get_opt waveshare_host "")"
 waveshare_port="$(get_opt waveshare_port "0")"
@@ -31,6 +31,8 @@ baudrate="$(get_opt baudrate "76800")"
 
 mqtt_host="$(get_opt mqtt_host "core-mosquitto")"
 mqtt_port="$(get_opt mqtt_port "1883")"
+mqtt_user="$(get_opt mqtt_user "")"
+mqtt_pass="$(get_opt mqtt_pass "")"
 mqtt_base_topic="$(get_opt mqtt_base_topic "ComfoBox")"
 
 bacnet_master_id="$(get_opt bacnet_master_id "1")"
@@ -42,6 +44,7 @@ echo "[INFO] mqtt=${mqtt_host}:${mqtt_port}"
 echo "[INFO] mqtt_base_topic=${mqtt_base_topic}"
 echo "[INFO] bacnet_master_id=${bacnet_master_id} bacnet_client_id=${bacnet_client_id}"
 
+# ---- RF77 ZIP ----
 ZIP="/app/ComfoBox2Mqtt_0.4.0.zip"
 if [ ! -f "$ZIP" ]; then
   echo "[ERROR] ZIP not found at $ZIP"
@@ -55,9 +58,13 @@ mkdir -p /app/rf77
 echo "[INFO] Unzipping RF77 package"
 unzip -o "$ZIP" -d /app/rf77 >/dev/null
 
+echo "[DEBUG] Listing extracted content:"
+find /app/rf77 -maxdepth 3 -type f -name "*.exe" -print || true
+
 EXE_PATH="$(find /app/rf77 -type f -name "ComfoBoxMqttConsole.exe" | head -n1 || true)"
 if [ -z "$EXE_PATH" ]; then
-  echo "[ERROR] EXE not found"
+  echo "[ERROR] ComfoBoxMqttConsole.exe not found after unzip"
+  find /app/rf77 -maxdepth 6 -print || true
   exit 1
 fi
 
@@ -67,89 +74,58 @@ CFG="${EXE_PATH}.config"
 echo "[INFO] RF77 detected at: $APPDIR"
 echo "[INFO] Config file: $CFG"
 
-# ---- socat TCP -> PTY (Waveshare TCP serial server) ----
-SOCAT_LOOP_PID=""
+# ---- Config patching (konservativ) ----
+patch_cfg_kv() {
+  # Patch patterns like: key="Something" value="..."
+  local key="$1"
+  local value="$2"
+  local file="$3"
 
-start_socat_loop() {
-  echo "[INFO] Starting socat (TCP->PTY) in a resilient loop..."
-
-  # kill older instances that might hold the link / connection
-  pkill -f "socat.*PTY,link=${serial_port}" >/dev/null 2>&1 || true
-  pkill -f "socat.*TCP:${waveshare_host}:${waveshare_port}" >/dev/null 2>&1 || true
-  rm -f "${serial_port}" >/dev/null 2>&1 || true
-
-  (
-    while true; do
-      # Create a PTY and link it to ${serial_port}. When TCP drops, socat exits.
-      # We immediately restart it so the link points to a fresh /dev/pts/X again.
-      socat \
-        "TCP:${waveshare_host}:${waveshare_port}" \
-        "PTY,link=${serial_port},raw,echo=0,waitslave" || true
-
-      echo "[WARN] socat exited; restarting in 1s..."
-      rm -f "${serial_port}" >/dev/null 2>&1 || true
-      sleep 1
-    done
-  ) &
-  SOCAT_LOOP_PID="$!"
+  if grep -q "key=\"$key\"" "$file" 2>/dev/null; then
+    sed -i -E "s/(key=\"$key\"[[:space:]]+value=\")([^\"]*)(\")/\1${value}\3/g" "$file" || true
+  fi
 }
 
-wait_for_tty() {
-  local tries=50
-  local i=0
-  while [ $i -lt $tries ]; do
-    if [ -L "${serial_port}" ] || [ -e "${serial_port}" ]; then
-      # Resolve link; it must be a character device (TTY)
-      local target
-      target="$(readlink -f "${serial_port}" 2>/dev/null || true)"
-      if [ -n "$target" ] && [ -c "$target" ]; then
-        echo "[INFO] Serial link ready: ${serial_port} -> ${target}"
-        return 0
-      fi
-    fi
-    sleep 0.1
-    i=$((i+1))
-  done
+if [ -f "$CFG" ]; then
+  echo "[INFO] Patching config"
 
-  echo "[ERROR] Serial link not ready / not a TTY: ${serial_port}"
-  ls -la "${serial_port}" || true
-  echo "[ERROR] Aborting."
-  return 1
-}
+  patch_cfg_kv "MqttHost" "$mqtt_host" "$CFG"
+  patch_cfg_kv "MqttPort" "$mqtt_port" "$CFG"
+  patch_cfg_kv "MqttBaseTopic" "$mqtt_base_topic" "$CFG"
+  patch_cfg_kv "SerialPort" "$serial_port" "$CFG"
+  patch_cfg_kv "Baudrate" "$baudrate" "$CFG"
+  patch_cfg_kv "BacnetMasterId" "$bacnet_master_id" "$CFG"
+  patch_cfg_kv "BacnetClientId" "$bacnet_client_id" "$CFG"
 
+  if [ -n "$mqtt_user" ]; then patch_cfg_kv "MqttUser" "$mqtt_user" "$CFG"; fi
+  if [ -n "$mqtt_pass" ]; then patch_cfg_kv "MqttPassword" "$mqtt_pass" "$CFG"; fi
+
+  # Fallbacks, falls RF77 config noch Default-Literale enthält
+  if grep -q "localhost" "$CFG" 2>/dev/null; then
+    sed -i "s|localhost|${mqtt_host}|g" "$CFG" || true
+  fi
+  if grep -q "COM8" "$CFG" 2>/dev/null; then
+    sed -i "s|COM8|${serial_port}|g" "$CFG" || true
+  fi
+  if grep -q ">76800<" "$CFG" 2>/dev/null; then
+    sed -i "s|>76800<|>${baudrate}<|g" "$CFG" || true
+  fi
+fi
+
+cd "$APPDIR"
+
+# ---- Start ----
 if [ "$use_socat" = "true" ]; then
   if [ -z "$waveshare_host" ] || [ "$waveshare_port" = "0" ]; then
     echo "[ERROR] socat enabled but waveshare_host/port not configured"
     exit 1
   fi
 
-  start_socat_loop
-  wait_for_tty
-  ls -la "$serial_port" || true
+  echo "[INFO] Starting ComfoBoxMqttConsole via socat (PTY + EXEC mono) to avoid 'Not a tty'"
+  exec socat -d -d \
+    "TCP:${waveshare_host}:${waveshare_port}" \
+    "EXEC:mono '${EXE_PATH}',pty,setsid,stderr"
 fi
 
-# ---- minimal config patch (only what we need) ----
-if [ -f "$CFG" ]; then
-  echo "[INFO] Patching config"
-
-  # Setting-based replacements:
-  sed -i '/<setting name="MqttHost"/{n;s|<value>.*</value>|<value>'"${mqtt_host}"'</value>|;}' "$CFG" || true
-  sed -i '/<setting name="MqttPort"/{n;s|<value>.*</value>|<value>'"${mqtt_port}"'</value>|;}' "$CFG" || true
-  sed -i '/<setting name="MqttBaseTopic"/{n;s|<value>.*</value>|<value>'"${mqtt_base_topic}"'</value>|;}' "$CFG" || true
-
-  sed -i '/<setting name="SerialPort"/{n;s|<value>.*</value>|<value>'"${serial_port}"'</value>|;}' "$CFG" || true
-  sed -i '/<setting name="Baudrate"/{n;s|<value>.*</value>|<value>'"${baudrate}"'</value>|;}' "$CFG" || true
-
-  sed -i '/<setting name="BacnetMasterId"/{n;s|<value>.*</value>|<value>'"${bacnet_master_id}"'</value>|;}' "$CFG" || true
-  sed -i '/<setting name="BacnetClientId"/{n;s|<value>.*</value>|<value>'"${bacnet_client_id}"'</value>|;}' "$CFG" || true
-
-  # Fallbacks:
-  sed -i "s|<value>localhost</value>|<value>${mqtt_host}</value>|g" "$CFG" || true
-  sed -i "s|<value>COM8</value>|<value>${serial_port}</value>|g" "$CFG" || true
-  sed -i "s|<value>76800</value>|<value>${baudrate}</value>|g" "$CFG" || true
-fi
-
-cd "$APPDIR"
-echo "[INFO] Starting ComfoBoxMqttConsole"
-# Run in foreground as intended (s6 will keep container up as long as this runs)
+echo "[INFO] Starting ComfoBoxMqttConsole (no socat)"
 exec mono "$EXE_PATH"
