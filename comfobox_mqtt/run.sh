@@ -21,7 +21,6 @@ get_opt() {
   echo "$def"
 }
 
-# ---- Options ----
 use_socat="$(get_opt use_socat "true")"
 waveshare_host="$(get_opt waveshare_host "")"
 waveshare_port="$(get_opt waveshare_port "0")"
@@ -44,7 +43,6 @@ echo "[INFO] mqtt=${mqtt_host}:${mqtt_port}"
 echo "[INFO] mqtt_base_topic=${mqtt_base_topic}"
 echo "[INFO] bacnet_master_id=${bacnet_master_id} bacnet_client_id=${bacnet_client_id}"
 
-# ---- RF77 ZIP ----
 ZIP="/app/ComfoBox2Mqtt_0.4.0.zip"
 if [ ! -f "$ZIP" ]; then
   echo "[ERROR] ZIP not found at $ZIP"
@@ -74,15 +72,25 @@ CFG="${EXE_PATH}.config"
 echo "[INFO] RF77 detected at: $APPDIR"
 echo "[INFO] Config file: $CFG"
 
-# ---- Config patching (konservativ) ----
 patch_cfg_kv() {
-  # Patch patterns like: key="Something" value="..."
   local key="$1"
   local value="$2"
   local file="$3"
 
   if grep -q "key=\"$key\"" "$file" 2>/dev/null; then
     sed -i -E "s/(key=\"$key\"[[:space:]]+value=\")([^\"]*)(\")/\1${value}\3/g" "$file" || true
+  fi
+}
+
+patch_setting_value() {
+  # Patch <setting name="X"...><value>...</value>
+  local name="$1"
+  local value="$2"
+  local file="$3"
+
+  if grep -q "setting name=\"$name\"" "$file" 2>/dev/null; then
+    # works across whitespace/newlines (simple, but reliable enough for this file)
+    sed -i -E "s|(setting name=\"$name\"[^\n]*<value>)([^<]*)(</value>)|\1${value}\3|g" "$file" || true
   fi
 }
 
@@ -100,28 +108,24 @@ if [ -f "$CFG" ]; then
   if [ -n "$mqtt_user" ]; then patch_cfg_kv "MqttUser" "$mqtt_user" "$CFG"; fi
   if [ -n "$mqtt_pass" ]; then patch_cfg_kv "MqttPassword" "$mqtt_pass" "$CFG"; fi
 
-  # Fallbacks, falls RF77 config noch Default-Literale enthält
-  if grep -q "localhost" "$CFG" 2>/dev/null; then
-    sed -i "s|localhost|${mqtt_host}|g" "$CFG" || true
-  fi
-  if grep -q "COM8" "$CFG" 2>/dev/null; then
-    sed -i "s|COM8|${serial_port}|g" "$CFG" || true
-  fi
-  if grep -q ">76800<" "$CFG" 2>/dev/null; then
-    sed -i "s|>76800<|>${baudrate}<|g" "$CFG" || true
-  fi
+  # Fallbacks für RF77 Standardwerte
+  sed -i "s|<value>localhost</value>|<value>${mqtt_host}</value>|g" "$CFG" || true
+  sed -i "s|<value>COM8</value>|<value>${serial_port}</value>|g" "$CFG" || true
+  sed -i "s|<value>76800</value>|<value>${baudrate}</value>|g" "$CFG" || true
+
+  # *** EINZIGE neue Maßnahme gegen CPU-Loop: Schreiben von topics.md deaktivieren ***
+  patch_setting_value "WriteTopicsToFile" "False" "$CFG"
 fi
 
 cd "$APPDIR"
 
-# ---- Start ----
 if [ "$use_socat" = "true" ]; then
   if [ -z "$waveshare_host" ] || [ "$waveshare_port" = "0" ]; then
     echo "[ERROR] socat enabled but waveshare_host/port not configured"
     exit 1
   fi
 
-  echo "[INFO] Starting ComfoBoxMqttConsole via socat (PTY + EXEC mono) to avoid 'Not a tty'"
+  echo "[INFO] Starting ComfoBoxMqttConsole via socat (PTY + EXEC mono)"
   exec socat -d -d \
     "TCP:${waveshare_host}:${waveshare_port}" \
     "EXEC:mono '${EXE_PATH}',pty,setsid,stderr"
