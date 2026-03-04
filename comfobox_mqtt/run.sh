@@ -1,153 +1,165 @@
-#!/usr/bin/env bash
+#!/usr/bin/with-contenv bash
 set -euo pipefail
 
-echo "[INFO] run.sh (Plan A stable unzip + socat + mono) starting"
+# =========================
+# Simple + stable run.sh
+# - unzip RF77 bundle
+# - start socat TCP->PTY
+# - patch ComfoBoxMqttConsole.exe.config (baud + IDs + MQTT + serial)
+# - run mono in foreground with restart loop (so add-on stays up)
+# =========================
 
-OPTIONS_JSON="/data/options.json"
+log() { echo "[INFO] $*"; }
+warn() { echo "[WARN] $*"; }
+err() { echo "[ERROR] $*" >&2; }
 
-get_opt() {
-  local key="$1"
-  local def="${2:-}"
-  if command -v jq >/dev/null 2>&1; then
-    local val
-    val="$(jq -r --arg k "$key" '.[$k] // empty' "$OPTIONS_JSON" 2>/dev/null || true)"
-    if [ -n "$val" ] && [ "$val" != "null" ]; then
-      echo "$val"
-      return
-    fi
+# ---- Options / env (keep compatible with what you already logged) ----
+WAVESHARE="${WAVESHARE:-192.168.0.24:4197}"
+SERIAL_LINK="${SERIAL_LINK:-/tmp/comfobox}"
+BAUD="${BAUD:-76800}"
+
+MQTT_HOST="${MQTT_HOST:-core-mosquitto}"
+MQTT_PORT="${MQTT_PORT:-1883}"
+MQTT_BASE_TOPIC="${MQTT_BASE_TOPIC:-ComfoBox}"
+
+BACNET_MASTER_ID="${BACNET_MASTER_ID:-1}"
+BACNET_CLIENT_ID="${BACNET_CLIENT_ID:-3}"
+
+# RF77 bundle location and extraction directory
+RF77_ZIP="${RF77_ZIP:-/app/rf77.zip}"
+RF77_DIR="${RF77_DIR:-/app/rf77}"
+
+# Restart loop delay (seconds)
+RESTART_DELAY="${RESTART_DELAY:-5}"
+
+SOCAT_PID=""
+
+cleanup() {
+  warn "Stopping..."
+  if [ -n "${SOCAT_PID}" ] && kill -0 "${SOCAT_PID}" >/dev/null 2>&1; then
+    kill "${SOCAT_PID}" >/dev/null 2>&1 || true
   fi
-  echo "$def"
+  exit 0
 }
 
-# --- options ---
-use_socat="$(get_opt use_socat "true")"
-waveshare_host="$(get_opt waveshare_host "")"
-waveshare_port="$(get_opt waveshare_port "0")"
-serial_port="$(get_opt serial_port "/tmp/comfobox")"
-baudrate="$(get_opt baudrate "38400")"
+trap cleanup SIGTERM SIGINT
 
-mqtt_host="$(get_opt mqtt_host "core-mosquitto")"
-mqtt_port="$(get_opt mqtt_port "1883")"
-mqtt_user="$(get_opt mqtt_user "")"
-mqtt_pass="$(get_opt mqtt_pass "")"
-mqtt_base_topic="$(get_opt mqtt_base_topic "ComfoBox")"
+log "run.sh starting"
+log "waveshare=${WAVESHARE}"
+log "serial=${SERIAL_LINK} baud=${BAUD}"
+log "mqtt=${MQTT_HOST}:${MQTT_PORT}"
+log "mqtt_base_topic=${MQTT_BASE_TOPIC}"
+log "bacnet_master_id=${BACNET_MASTER_ID} bacnet_client_id=${BACNET_CLIENT_ID}"
 
-bacnet_master_id="$(get_opt bacnet_master_id "1")"
-bacnet_client_id="$(get_opt bacnet_client_id "3")"
-
-echo "[INFO] waveshare=${waveshare_host}:${waveshare_port}"
-echo "[INFO] serial=${serial_port} baud=${baudrate}"
-echo "[INFO] mqtt=${mqtt_host}:${mqtt_port}"
-echo "[INFO] mqtt_base_topic=${mqtt_base_topic}"
-echo "[INFO] bacnet_master_id=${bacnet_master_id} bacnet_client_id=${bacnet_client_id}"
-
-# --- RF77 package (bundled in /app) ---
-ZIP="/app/ComfoBox2Mqtt_0.4.0.zip"
-if [ ! -f "$ZIP" ]; then
-  echo "[ERROR] ZIP not found at $ZIP"
+# ---- Validate RF77 zip ----
+if [ ! -f "${RF77_ZIP}" ]; then
+  err "RF77 zip not found: ${RF77_ZIP}"
+  err "Place the RF77 bundle there or set RF77_ZIP accordingly."
   exit 1
 fi
 
-echo "[INFO] Cleaning previous RF77 folder"
-rm -rf /app/rf77
-mkdir -p /app/rf77
+# ---- Fresh extract every start (reproducible) ----
+log "Cleaning previous RF77 folder"
+rm -rf "${RF77_DIR}"
+mkdir -p "${RF77_DIR}"
 
-echo "[INFO] Unzipping RF77 package"
-unzip -o "$ZIP" -d /app/rf77 >/dev/null
+log "Unzipping RF77 package"
+unzip -q "${RF77_ZIP}" -d "${RF77_DIR}"
 
-echo "[DEBUG] Listing extracted content:"
-find /app/rf77 -maxdepth 4 -type f -name "*.exe" -print || true
+# ---- Locate EXE + config ----
+EXE_PATH="$(find "${RF77_DIR}" -type f -name 'ComfoBoxMqttConsole.exe' | head -n 1 || true)"
+if [ -z "${EXE_PATH}" ]; then
+  err "ComfoBoxMqttConsole.exe not found under ${RF77_DIR}"
+  exit 1
+fi
+CFG_PATH="${EXE_PATH}.config"
 
-# --- auto-detect exe ---
-EXE_PATH="$(find /app/rf77 -type f -name "ComfoBoxMqttConsole.exe" | head -n1 || true)"
-if [ -z "$EXE_PATH" ]; then
-  echo "[ERROR] ComfoBoxMqttConsole.exe not found after unzip"
-  echo "[DEBUG] Full tree:"
-  find /app/rf77 -maxdepth 6 -print || true
+log "RF77 detected at: $(dirname "${EXE_PATH}")"
+log "Config file: ${CFG_PATH}"
+
+if [ ! -f "${CFG_PATH}" ]; then
+  err "Config file missing: ${CFG_PATH}"
   exit 1
 fi
 
-APPDIR="$(dirname "$EXE_PATH")"
-CFG="${EXE_PATH}.config"
+# ---- Start socat (TCP->PTY) ----
+log "Starting socat (TCP->PTY)..."
+pkill -f "socat.*${SERIAL_LINK}" >/dev/null 2>&1 || true
+rm -f "${SERIAL_LINK}"
 
-echo "[INFO] RF77 detected at: $APPDIR"
-echo "[INFO] Config file: $CFG"
+# waitslave prevents early connect race; raw/echo=0 for serial-like behavior
+socat "TCP:${WAVESHARE}" "PTY,link=${SERIAL_LINK},raw,echo=0,waitslave" &
+SOCAT_PID="$!"
 
-# --- socat TCP->PTY bridge for Waveshare ---
-if [ "$use_socat" = "true" ]; then
-  if [ -z "$waveshare_host" ] || [ "$waveshare_port" = "0" ]; then
-    echo "[ERROR] use_socat=true but waveshare_host/port not set"
-    exit 1
+# Wait until PTY link is ready
+for _ in $(seq 1 50); do
+  if [ -L "${SERIAL_LINK}" ] || [ -e "${SERIAL_LINK}" ]; then
+    break
   fi
+  sleep 0.1
+done
+ls -l "${SERIAL_LINK}" || true
 
-  echo "[INFO] Starting socat (TCP->PTY)..."
-  socat \
-    "PTY,link=${serial_port},rawer,echo=0,waitslave" \
-    "TCP:${waveshare_host}:${waveshare_port}" &
-  sleep 1
-  ls -la "$serial_port" || true
-fi
+# ---- Patch RF77 .exe.config (XML settings) ----
+log "Patching config"
 
-# --- patch config (targeted by setting-name / known keys, no guessing) ---
-if [ -f "$CFG" ]; then
-  echo "[INFO] Patching config"
+export CFG_PATH SERIAL_LINK BAUD MQTT_HOST MQTT_PORT MQTT_BASE_TOPIC BACNET_MASTER_ID BACNET_CLIENT_ID
 
-  # Helper: replace <setting name="X"> ... <value>OLD</value> with NEW (within that setting block)
-  replace_setting_value() {
-    local setting="$1"
-    local newval="$2"
-    # Replace only the first <value>...</value> within the matching <setting name="..."> block
-    awk -v setting="$setting" -v newval="$newval" '
-      BEGIN{inset=0; done=0}
-      {
-        line=$0
-        if (line ~ "<setting name=\""setting"\"") { inset=1 }
-        if (inset==1 && done==0 && line ~ "<value>") {
-          sub(/<value>[^<]*<\/value>/, "<value>" newval "</value>", line)
-          done=1
-        }
-        print line
-        if (inset==1 && line ~ "</setting>") { inset=0; done=0 }
-      }
-    ' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
-  }
+python3 - <<'PY'
+import os, re, pathlib
 
-  # ComfoBoxLib.Properties.Settings
-  replace_setting_value "Baudrate"            "${baudrate}"
-  replace_setting_value "Port"                "${serial_port}"
-  replace_setting_value "BacnetClientId"      "${bacnet_client_id}"
-  replace_setting_value "BacnetMasterId"      "${bacnet_master_id}"
-  replace_setting_value "MqttBrokerAddress"   "${mqtt_host}"
+cfg = os.environ["CFG_PATH"]
+serial_link = os.environ["SERIAL_LINK"]
+baud = os.environ["BAUD"]
+mqtt_host = os.environ["MQTT_HOST"]
+mqtt_port = os.environ["MQTT_PORT"]
+mqtt_base = os.environ["MQTT_BASE_TOPIC"]
+bacnet_master = os.environ["BACNET_MASTER_ID"]
+bacnet_client = os.environ["BACNET_CLIENT_ID"]
 
-  # ComfoBoxMqtt.Properties.Settings
-  replace_setting_value "BaseTopic"           "${mqtt_base_topic}"
+p = pathlib.Path(cfg)
+text = p.read_text(encoding="utf-8", errors="replace")
 
-  # Optional: if the app also reads appSettings keys, ensure they exist/updated (best-effort)
-  # Keep it simple: only substitute if keys already exist.
-  sed -i "s|<add key=\"MqttHost\" value=\"[^\"]*\" />|<add key=\"MqttHost\" value=\"${mqtt_host}\" />|g" "$CFG" || true
-  sed -i "s|<add key=\"MqttPort\" value=\"[^\"]*\" />|<add key=\"MqttPort\" value=\"${mqtt_port}\" />|g" "$CFG" || true
-  sed -i "s|<add key=\"SerialPort\" value=\"[^\"]*\" />|<add key=\"SerialPort\" value=\"${serial_port}\" />|g" "$CFG" || true
-  sed -i "s|<add key=\"Baudrate\" value=\"[^\"]*\" />|<add key=\"Baudrate\" value=\"${baudrate}\" />|g" "$CFG" || true
+def set_setting(name: str, value: str, s: str):
+    # <setting name="X" ...><value>...</value></setting>
+    pat = re.compile(r'(<setting\s+name="'+re.escape(name)+r'".*?>\s*<value>)(.*?)(</value>)', re.DOTALL)
+    if pat.search(s):
+        s = pat.sub(r'\1'+str(value)+r'\3', s)
+        return s, True
+    return s, False
 
-  if [ -n "$mqtt_user" ]; then
-    sed -i "s|<add key=\"MqttUser\" value=\"[^\"]*\" />|<add key=\"MqttUser\" value=\"${mqtt_user}\" />|g" "$CFG" || true
-  fi
-  if [ -n "$mqtt_pass" ]; then
-    # Avoid printing password; just set if key exists
-    sed -i "s|<add key=\"MqttPassword\" value=\"[^\"]*\" />|<add key=\"MqttPassword\" value=\"${mqtt_pass}\" />|g" "$CFG" || true
-  fi
-fi
+changes = {
+    "SerialPort": serial_link,
+    "Baudrate": baud,
+    "MqttHost": mqtt_host,
+    "MqttPort": mqtt_port,
+    "MqttBaseTopic": mqtt_base,
+    "BacnetMasterId": bacnet_master,
+    "BacnetClientId": bacnet_client,
+}
 
-# --- start mono in a way that won't cause CPU/log storms on crash ---
-echo "[INFO] Starting ComfoBoxMqttConsole (attached to a PTY; low-noise)"
-cd "$APPDIR"
+done, missing = [], []
+for k, v in changes.items():
+    text, ok = set_setting(k, v, text)
+    (done if ok else missing).append(k)
 
-# If mono exits immediately, pause a bit to avoid restart/CPU storm
-set +e
-socat \
-  "PTY,rawer,echo=0" \
-  "EXEC:/bin/sh -lc \"exec mono \\\"$EXE_PATH\\\"\",pty,setsid,stderr"
-rc=$?
-echo "[ERROR] ComfoBoxMqttConsole exited with rc=$rc"
-sleep 10
-exit $rc
+p.write_text(text, encoding="utf-8")
+
+print("[INFO] Patched settings: " + ", ".join(done))
+if missing:
+    print("[WARN] Settings not found (not patched): " + ", ".join(missing))
+PY
+
+# ---- Run console in FOREGROUND with restart loop ----
+log "Starting ComfoBoxMqttConsole (foreground; will restart on exit)"
+
+while true; do
+  log "Launching: mono ${EXE_PATH}"
+  # Prefix output so it is visible in HA logs; keep it simple and readable
+  mono "${EXE_PATH}" 2>&1 | sed 's/^/[RF77] /'
+  rc=${PIPESTATUS[0]}
+
+  # rc=0 means the app chose to exit; without loop the add-on would stop
+  warn "ComfoBoxMqttConsole exited with rc=${rc}. Restarting in ${RESTART_DELAY}s..."
+  sleep "${RESTART_DELAY}"
+done
