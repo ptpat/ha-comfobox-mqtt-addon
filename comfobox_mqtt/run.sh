@@ -1,8 +1,7 @@
-
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[INFO] run.sh (Plan: socat discover PTY + ln -sf + socat EXEC mono with PTY) starting"
+echo "[INFO] run.sh (Plan: discover PTY + ln -sf + socat EXEC mono with PTY + tail logfile) starting"
 
 OPTIONS_JSON="/data/options.json"
 
@@ -80,6 +79,18 @@ if [ -f "$CFG" ]; then
   patch_setting_value_multiline "Port" "${serial_port}" "$CFG"
 fi
 
+# --- NEW: Tail RF77 logfile into Add-on log for diagnosis ---
+LOGFILE="${APPDIR}/ComfoboxConsole_Log.txt"
+echo "[INFO] Tailing RF77 logfile: ${LOGFILE}"
+# Create file if it doesn't exist yet, so tail -F attaches cleanly
+touch "$LOGFILE" || true
+tail -n 0 -F "$LOGFILE" &
+TAIL_PID="$!"
+cleanup() {
+  kill "$TAIL_PID" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
 if [ "$use_socat" != "true" ]; then
   echo "[INFO] Starting mono (no socat)"
   exec mono "$EXE_PATH"
@@ -90,12 +101,10 @@ if [ -z "$waveshare_host" ] || [ "$waveshare_port" = "0" ]; then
   exit 1
 fi
 
-# --- Discover PTY with a short-lived socat ---
 echo "[INFO] Discovering PTY via socat..."
 SOCAT_LOG="/tmp/socat_discover.log"
 rm -f "$SOCAT_LOG" >/dev/null 2>&1 || true
 
-# Run socat briefly in background to allocate a PTY
 (socat -d -d "TCP:${waveshare_host}:${waveshare_port}" "PTY,raw,echo=0,waitslave" 2>"$SOCAT_LOG") &
 DISCOVER_PID="$!"
 
@@ -121,11 +130,9 @@ rm -f "${serial_port}" >/dev/null 2>&1 || true
 ln -sf "${PTY}" "${serial_port}" || true
 ls -la "${serial_port}" || true
 
-# Stop discovery socat to free the TCP session cleanly
 kill "$DISCOVER_PID" >/dev/null 2>&1 || true
 wait "$DISCOVER_PID" >/dev/null 2>&1 || true
 
-# --- Now start the REAL socat which EXECs mono as child (gives it a TTY) ---
 echo "[INFO] Starting socat TCP<->EXEC(mono) with PTY (child gets TTY)"
 exec socat -d -d \
   "TCP:${waveshare_host}:${waveshare_port}" \
