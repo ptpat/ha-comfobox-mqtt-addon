@@ -33,7 +33,6 @@ mqtt_host="$(get_opt mqtt_host "core-mosquitto")"
 mqtt_port="$(get_opt mqtt_port "1883")"
 mqtt_base_topic="$(get_opt mqtt_base_topic "ComfoBox")"
 
-# NEW: BACnet IDs configurable (yesterday goal)
 bacnet_master_id="$(get_opt bacnet_master_id "1")"
 bacnet_client_id="$(get_opt bacnet_client_id "3")"
 
@@ -69,22 +68,63 @@ echo "[INFO] RF77 detected at: $APPDIR"
 echo "[INFO] Config file: $CFG"
 
 # ---- socat TCP -> PTY (Waveshare TCP serial server) ----
+SOCAT_LOOP_PID=""
+
+start_socat_loop() {
+  echo "[INFO] Starting socat (TCP->PTY) in a resilient loop..."
+
+  # kill older instances that might hold the link / connection
+  pkill -f "socat.*PTY,link=${serial_port}" >/dev/null 2>&1 || true
+  pkill -f "socat.*TCP:${waveshare_host}:${waveshare_port}" >/dev/null 2>&1 || true
+  rm -f "${serial_port}" >/dev/null 2>&1 || true
+
+  (
+    while true; do
+      # Create a PTY and link it to ${serial_port}. When TCP drops, socat exits.
+      # We immediately restart it so the link points to a fresh /dev/pts/X again.
+      socat \
+        "TCP:${waveshare_host}:${waveshare_port}" \
+        "PTY,link=${serial_port},raw,echo=0,waitslave" || true
+
+      echo "[WARN] socat exited; restarting in 1s..."
+      rm -f "${serial_port}" >/dev/null 2>&1 || true
+      sleep 1
+    done
+  ) &
+  SOCAT_LOOP_PID="$!"
+}
+
+wait_for_tty() {
+  local tries=50
+  local i=0
+  while [ $i -lt $tries ]; do
+    if [ -L "${serial_port}" ] || [ -e "${serial_port}" ]; then
+      # Resolve link; it must be a character device (TTY)
+      local target
+      target="$(readlink -f "${serial_port}" 2>/dev/null || true)"
+      if [ -n "$target" ] && [ -c "$target" ]; then
+        echo "[INFO] Serial link ready: ${serial_port} -> ${target}"
+        return 0
+      fi
+    fi
+    sleep 0.1
+    i=$((i+1))
+  done
+
+  echo "[ERROR] Serial link not ready / not a TTY: ${serial_port}"
+  ls -la "${serial_port}" || true
+  echo "[ERROR] Aborting."
+  return 1
+}
+
 if [ "$use_socat" = "true" ]; then
   if [ -z "$waveshare_host" ] || [ "$waveshare_port" = "0" ]; then
     echo "[ERROR] socat enabled but waveshare_host/port not configured"
     exit 1
   fi
 
-  echo "[INFO] Starting socat (TCP->PTY)..."
-  # Kill possible old socat instances using the same link
-  pkill -f "socat.*${serial_port}" >/dev/null 2>&1 || true
-  rm -f "${serial_port}" >/dev/null 2>&1 || true
-
-  socat \
-    "TCP:${waveshare_host}:${waveshare_port}" \
-    "PTY,link=${serial_port},rawer,echo=0,waitslave" &
-
-  sleep 1
+  start_socat_loop
+  wait_for_tty
   ls -la "$serial_port" || true
 fi
 
@@ -92,8 +132,7 @@ fi
 if [ -f "$CFG" ]; then
   echo "[INFO] Patching config"
 
-  # Try robust, setting-based replacements first (preferred)
-  # These work if the config contains <setting name="X"><value>...</value>
+  # Setting-based replacements:
   sed -i '/<setting name="MqttHost"/{n;s|<value>.*</value>|<value>'"${mqtt_host}"'</value>|;}' "$CFG" || true
   sed -i '/<setting name="MqttPort"/{n;s|<value>.*</value>|<value>'"${mqtt_port}"'</value>|;}' "$CFG" || true
   sed -i '/<setting name="MqttBaseTopic"/{n;s|<value>.*</value>|<value>'"${mqtt_base_topic}"'</value>|;}' "$CFG" || true
@@ -104,14 +143,13 @@ if [ -f "$CFG" ]; then
   sed -i '/<setting name="BacnetMasterId"/{n;s|<value>.*</value>|<value>'"${bacnet_master_id}"'</value>|;}' "$CFG" || true
   sed -i '/<setting name="BacnetClientId"/{n;s|<value>.*</value>|<value>'"${bacnet_client_id}"'</value>|;}' "$CFG" || true
 
-  # Fallbacks (for older configs that may have literal defaults)
+  # Fallbacks:
   sed -i "s|<value>localhost</value>|<value>${mqtt_host}</value>|g" "$CFG" || true
   sed -i "s|<value>COM8</value>|<value>${serial_port}</value>|g" "$CFG" || true
-
-  # Keep your old behavior: if the upstream config hardcodes 76800 somewhere, allow overriding it.
   sed -i "s|<value>76800</value>|<value>${baudrate}</value>|g" "$CFG" || true
 fi
 
 cd "$APPDIR"
 echo "[INFO] Starting ComfoBoxMqttConsole"
+# Run in foreground as intended (s6 will keep container up as long as this runs)
 exec mono "$EXE_PATH"
