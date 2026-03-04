@@ -72,46 +72,38 @@ CFG="${EXE_PATH}.config"
 echo "[INFO] RF77 detected at: $APPDIR"
 echo "[INFO] Config file: $CFG"
 
-patch_cfg_kv() {
-  local key="$1"
-  local value="$2"
-  local file="$3"
-
-  if grep -q "key=\"$key\"" "$file" 2>/dev/null; then
-    sed -i -E "s/(key=\"$key\"[[:space:]]+value=\")([^\"]*)(\")/\1${value}\3/g" "$file" || true
-  fi
-}
-
-patch_setting_value() {
+patch_setting_value_multiline() {
+  # Replace the <value>...</value> inside a <setting name="X"> ... </setting> block
   local name="$1"
-  local value="$2"
+  local newval="$2"
   local file="$3"
 
-  if grep -q "setting name=\"$name\"" "$file" 2>/dev/null; then
-    sed -i -E "s|(setting name=\"$name\"[^\n]*<value>)([^<]*)(</value>)|\1${value}\3|g" "$file" || true
+  if ! grep -q "setting name=\"$name\"" "$file" 2>/dev/null; then
+    return 0
   fi
+
+  # sed range from the line containing the setting name until </setting>, then replace the first <value>...</value>
+  sed -i -E "/setting name=\"$name\"/,/<\/setting>/ s|<value>[^<]*</value>|<value>${newval}</value>|" "$file" || true
 }
 
 if [ -f "$CFG" ]; then
   echo "[INFO] Patching config"
 
-  # MQTT + BaseTopic in RF77 settings (these are in <applicationSettings>, not <appSettings>)
+  # Patch known defaults (safe)
   sed -i "s|<value>localhost</value>|<value>${mqtt_host}</value>|g" "$CFG" || true
-  sed -i "s|<value>ComfoBox</value>|<value>${mqtt_base_topic}</value>|g" "$CFG" || true
-
-  # Serial/BACnet
   sed -i "s|<value>COM8</value>|<value>${serial_port}</value>|g" "$CFG" || true
   sed -i "s|<value>76800</value>|<value>${baudrate}</value>|g" "$CFG" || true
-  patch_setting_value "BacnetMasterId" "${bacnet_master_id}" "$CFG"
-  patch_setting_value "BacnetClientId" "${bacnet_client_id}" "$CFG"
 
-  # Disable file-writing (topics.md)
-  patch_setting_value "WriteTopicsToFile" "False" "$CFG"
+  # Multiline-safe setting patches
+  patch_setting_value_multiline "BacnetMasterId" "${bacnet_master_id}" "$CFG"
+  patch_setting_value_multiline "BacnetClientId" "${bacnet_client_id}" "$CFG"
+  patch_setting_value_multiline "WriteTopicsToFile" "False" "$CFG"
+  patch_setting_value_multiline "BaseTopic" "${mqtt_base_topic}" "$CFG"
+  patch_setting_value_multiline "MqttBrokerAddress" "${mqtt_host}" "$CFG"
 
   echo "[INFO] Dumping effective settings (post-patch):"
-  # show only the relevant settings to avoid spamming
-  grep -n -E 'setting name="(Baudrate|Port|BacnetClientId|BacnetMasterId|MqttBrokerAddress|BaseTopic|WriteTopicsToFile)"' -n "$CFG" || true
-  grep -n -E '<value>(/tmp/comfobox|192\.168\.0\.24|core-mosquitto|False|True|[0-9]{1,6})</value>' "$CFG" | head -n 80 || true
+  grep -n -E 'setting name="(Baudrate|Port|BacnetClientId|BacnetMasterId|MqttBrokerAddress|BaseTopic|WriteTopicsToFile)"' "$CFG" || true
+  grep -n -E '<value>(/tmp/comfobox|core-mosquitto|False|True|[0-9]{1,6})</value>' "$CFG" | head -n 120 || true
 fi
 
 cd "$APPDIR"
