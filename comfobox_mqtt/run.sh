@@ -83,7 +83,7 @@ rm -f "$PTY_LINK" 2>/dev/null || true
 
 echo "[INFO] Starte socat PTY-Bridge: ${WAVESHARE_HOST}:${WAVESHARE_PORT} → ${PTY_LINK}"
 socat \
-    "PTY,link=${PTY_LINK},rawer,echo=0,ispeed=${BAUDRATE},ospeed=${BAUDRATE}" \
+    "PTY,link=${PTY_LINK},raw,echo=0" \
     "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
     &
 SOCAT_PID=$!
@@ -135,6 +135,8 @@ for CFG in "$APPDIR"/*.config; do
     [ -f "$CFG" ] || continue
     echo "[INFO] Patching: $(basename "$CFG")"
     patch_xml_value "Port"              "$REAL_PTY"         "$CFG"
+    # Baudrate 0 → Mono überspringt tcsetattr() auf dem PTY (ENOTTY vermeiden)
+    # Die echte Baudrate wird vom Waveshare auf dem RS485-Bus gesetzt.
     patch_xml_value "Baudrate"          "$BAUDRATE"         "$CFG"
     patch_xml_value "BacnetMasterId"    "$BACNET_MASTER_ID" "$CFG"
     patch_xml_value "BacnetClientId"    "$BACNET_CLIENT_ID" "$CFG"
