@@ -93,6 +93,13 @@ Check the add-on log under **Settings → Add-ons → ComfoBox MQTT Bridge → L
 | `Didn't get any messages from the Bacnet Master` | BACnet communication failure | Check baudrate and BACnet IDs match the ComfoBox OEM settings |
 | `mono crashed` | Runtime error | Check full log for the exception detail above this message |
 
-## Based on
+## Credits & Licensing
 
-- [RF77/comfobox-mqtt](https://github.com/RF77/comfobox-mqtt) — BACnet/MSTP to MQTT bridge (.NET/Mono), version 0.4.0
+This add-on bundles a pre-compiled binary from **[RF77/comfobox-mqtt](https://github.com/RF77/comfobox-mqtt)** — the actual BACnet/MSTP to MQTT bridge written in C#/.NET by RF77. Without this work, this add-on would not exist.
+
+| Component | Author | License |
+|---|---|---|
+| `ComfoBox2Mqtt_0.4.0.zip` (bundled binary) | [RF77](https://github.com/RF77) | [Eclipse Public License v1.0](https://www.eclipse.org/legal/epl-v10.html) |
+| Add-on wrapper (run.sh, Dockerfile, config.yaml, …) | ptpat | MIT |
+
+See [NOTICE](./NOTICE) and [LICENSE-RF77](./LICENSE-RF77) for full license texts.
