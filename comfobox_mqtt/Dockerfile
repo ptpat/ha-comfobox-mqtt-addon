@@ -19,9 +19,10 @@ RUN set -eux; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
-# LD_PRELOAD Wrapper: tcsetattr() auf PTY gibt ENOTTY auf ARM/aarch64.
-# C-Code direkt ins Dockerfile eingebettet — kein separates File nötig.
-RUN printf '#define _GNU_SOURCE\n#include <termios.h>\n#include <errno.h>\n#include <dlfcn.h>\ntypedef int (*fn_t)(int,int,const struct termios*);\nint tcsetattr(int fd,int act,const struct termios*t){\n  static fn_t real=NULL;\n  if(!real)real=(fn_t)dlsym(RTLD_NEXT,"tcsetattr");\n  int r=real(fd,act,t);\n  if(r==-1&&errno==ENOTTY){errno=0;return 0;}\n  return r;\n}\n' > /tmp/tcsetattr_fix.c \
+# LD_PRELOAD Wrapper: tcsetattr() ENOTTY auf PTY/aarch64 abfangen.
+# C-Code via base64 eingebettet um Shell-Escaping-Probleme zu vermeiden.
+RUN echo "I2RlZmluZSBfR05VX1NPVVJDRQojaW5jbHVkZSA8dGVybWlvcy5oPgojaW5jbHVkZSA8ZXJybm8uaD4KI2luY2x1ZGUgPGRsZmNuLmg+CnR5cGVkZWYgaW50ICgqZm5fdCkoaW50LGludCxjb25zdCBzdHJ1Y3QgdGVybWlvcyopOwppbnQgdGNzZXRhdHRyKGludCBmZCxpbnQgYWN0LGNvbnN0IHN0cnVjdCB0ZXJtaW9zKnQpewogIHN0YXRpYyBmbl90IHJlYWw9TlVMTDsKICBpZighcmVhbClyZWFsPShmbl90KWRsc3ltKFJUTERfTkVYVCwidGNzZXRhdHRyIik7CiAgaW50IHI9cmVhbChmZCxhY3QsdCk7CiAgaWYocj09LTEmJmVycm5vPT1FTk9UVFkpe2Vycm5vPTA7cmV0dXJuIDA7fQogIHJldHVybiByOwp9Cg==" \
+        | base64 -d > /tmp/tcsetattr_fix.c \
     && gcc -shared -fPIC -o /usr/local/lib/tcsetattr_fix.so /tmp/tcsetattr_fix.c -ldl \
     && rm /tmp/tcsetattr_fix.c
 
