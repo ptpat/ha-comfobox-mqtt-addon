@@ -104,58 +104,57 @@ for CFG in "$APPDIR"/*.config; do
 done
 
 # ── Cleanup Handler ───────────────────────────────────────────────────────────
-SER2NET_PID=""
+SOCAT_PID=""
 MONO_PID=""
 
 cleanup() {
     echo "[INFO] Shutdown: stoppe Prozesse..."
-    [ -n "$MONO_PID" ]    && kill "$MONO_PID"    2>/dev/null || true
-    [ -n "$SER2NET_PID" ] && kill "$SER2NET_PID" 2>/dev/null || true
-    rm -f /tmp/ser2net.conf
+    [ -n "$MONO_PID" ]  && kill "$MONO_PID"  2>/dev/null || true
+    [ -n "$SOCAT_PID" ] && kill "$SOCAT_PID" 2>/dev/null || true
+    rm -f /tmp/comfobox
     exit 0
 }
 trap cleanup SIGTERM SIGINT
 
-# ── ser2net: TCP → virtueller serieller Port ──────────────────────────────────
-# ser2net erstellt /dev/ttyV0 als echtes TTY-Device das Mono/dotnet korrekt
-# öffnen kann. socat PTY schlug fehl weil Alpine/Mono isatty() auf PTY-Slave
-# ablehnt ("Not a tty").
-SERIAL_DEV="/dev/ttyV0"
+# ── socat: virtueller serieller Port ─────────────────────────────────────────
+# Verwendet waitslave damit socat wartet bis Mono den Slave-PTY öffnet.
+# group-late=dialout und mode=660 geben Mono Zugriff auf den PTY.
+SERIAL_DEV="/tmp/comfobox"
 
-echo "[INFO] Starte ser2net: ${WAVESHARE_HOST}:${WAVESHARE_PORT} → ${SERIAL_DEV}"
+echo "[INFO] Starte socat PTY-Bridge: ${WAVESHARE_HOST}:${WAVESHARE_PORT} → ${SERIAL_DEV}"
 
-# ser2net Konfigurationsdatei erstellen
-cat > /tmp/ser2net.conf << EOF
-connection: &con1
-  accepter: serialdev,${SERIAL_DEV},${BAUDRATE}n81
-  connector: tcp,${WAVESHARE_HOST},${WAVESHARE_PORT}
-  options:
-    kickolduser: true
-EOF
+rm -f "$SERIAL_DEV"
 
-# ser2net starten
-ser2net -c /tmp/ser2net.conf -n &
-SER2NET_PID=$!
+socat \
+    "pty,link=${SERIAL_DEV},waitslave,group-late=root,mode=666" \
+    "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
+    &
+SOCAT_PID=$!
 
-# Warten bis /dev/ttyV0 erscheint (max 15 Sekunden)
+# Warten bis Symlink erscheint (max 15 Sekunden)
 echo "[INFO] Warte auf ${SERIAL_DEV}..."
 for i in $(seq 1 15); do
     if [ -e "$SERIAL_DEV" ]; then
         echo "[INFO] ${SERIAL_DEV} bereit nach ${i}s"
+        # Echten PTY-Pfad ermitteln und loggen
+        REAL_PTY="$(readlink -f "$SERIAL_DEV" 2>/dev/null || echo "$SERIAL_DEV")"
+        echo "[INFO] Echter PTY-Pfad: ${REAL_PTY}"
+        echo "[DEBUG] PTY permissions: $(ls -la "$REAL_PTY" 2>/dev/null || echo 'unbekannt')"
         break
     fi
     sleep 1
     if [ "$i" -eq 15 ]; then
         echo "[ERROR] ${SERIAL_DEV} nicht bereit nach 15s"
-        echo "[DEBUG] ser2net PID=${SER2NET_PID} aktiv: $(kill -0 "$SER2NET_PID" 2>/dev/null && echo ja || echo nein)"
-        echo "[DEBUG] /dev Inhalt (tty*):"
-        ls -la /dev/tty* 2>/dev/null || echo "(keine tty devices)"
-        kill "$SER2NET_PID" 2>/dev/null || true
+        kill "$SOCAT_PID" 2>/dev/null || true
         exit 1
     fi
 done
 
-# Config mit /dev/ttyV0 patchen
+# PTY-Berechtigungen explizit setzen damit Mono zugreifen kann
+REAL_PTY="$(readlink -f "$SERIAL_DEV" 2>/dev/null || echo "$SERIAL_DEV")"
+chmod 666 "$REAL_PTY" 2>/dev/null || true
+
+# Config mit dem Symlink-Pfad patchen
 for CFG in "$APPDIR"/*.config; do
     [ -f "$CFG" ] || continue
     patch_xml_value "Port" "$SERIAL_DEV" "$CFG"
@@ -167,12 +166,12 @@ cd "$APPDIR"
 mono "${EXE_PATH}" &
 MONO_PID=$!
 
-echo "[INFO] Läuft — ser2net PID=${SER2NET_PID}, mono PID=${MONO_PID}"
+echo "[INFO] Läuft — socat PID=${SOCAT_PID}, mono PID=${MONO_PID}"
 
 # Prozesse überwachen
 while true; do
-    if ! kill -0 "$SER2NET_PID" 2>/dev/null; then
-        echo "[ERROR] ser2net abgestürzt — beende Addon"
+    if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
+        echo "[ERROR] socat abgestürzt — beende Addon"
         cleanup
     fi
     if ! kill -0 "$MONO_PID" 2>/dev/null; then
