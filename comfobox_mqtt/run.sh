@@ -140,8 +140,12 @@ for i in $(seq 1 15); do
     fi
     sleep 1
     if [ "$i" -eq 15 ]; then
-        echo "[ERROR] PTY nicht bereit nach 15s — Verbindung zum Waveshare fehlgeschlagen?"
-        cat "$SOCAT_LOG" || true
+        echo "[ERROR] PTY nicht bereit nach 15s"
+        echo "[DEBUG] socat PID=${SOCAT_PID} noch aktiv: $(kill -0 "$SOCAT_PID" 2>/dev/null && echo ja || echo nein)"
+        echo "[DEBUG] socat log:"
+        cat "$SOCAT_LOG" 2>/dev/null || echo "(leer)"
+        echo "[DEBUG] /dev/pts Inhalt:"
+        ls -la /dev/pts/ 2>/dev/null || echo "(nicht lesbar)"
         kill "$SOCAT_PID" 2>/dev/null || true
         exit 1
     fi
