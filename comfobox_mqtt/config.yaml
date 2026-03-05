@@ -1,3 +1,4 @@
+
 name: "ComfoBox MQTT Bridge"
 version: "1.3.13"
 slug: "comfobox_mqtt"
@@ -26,7 +27,7 @@ options:
   # Serielle Verbindung (Standard für ComfoBox Series 5)
   # Hinweis: RF77 Autor berichtet dass 38400 auf Raspberry Pi funktioniert hat.
   # Falls 76800 nicht funktioniert, bitte auf 38400 ändern und ComfoBox neu starten.
-  baudrate: 76800
+  baudrate: 38400
 
   # MQTT Broker
   # HINWEIS: RF77 ComfoBoxMqttConsole unterstuetzt keine MQTT-Authentifizierung.
