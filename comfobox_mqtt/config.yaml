@@ -1,5 +1,5 @@
 name: "ComfoBox MQTT Bridge"
-version: "1.3.8"
+version: "1.3.9"
 slug: "comfobox_mqtt"
 description: "Zehnder ComfoBox Series 5 (ELESTA) via Waveshare RS485/TCP → RF77 ComfoBox2Mqtt → MQTT"
 url: "https://github.com/ptpat/ha-comfobox-mqtt-addon"
