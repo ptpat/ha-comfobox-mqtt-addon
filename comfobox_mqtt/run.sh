@@ -162,7 +162,9 @@ for CFG in "$APPDIR"/*.config; do
 done
 
 # ── Schritt 4: Mono starten ──────────────────────────────────────────────────────
-echo "[INFO] Starte mono ${EXE_PATH}"
+# LD_PRELOAD: tcsetattr_fix.so fängt ENOTTY auf PTY-Slaves ab (ARM/aarch64)
+export LD_PRELOAD=/usr/local/lib/tcsetattr_fix.so
+echo "[INFO] Starte mono ${EXE_PATH} (LD_PRELOAD=tcsetattr_fix.so)"
 cd "$APPDIR"
 mono "${EXE_PATH}" &
 MONO_PID=$!
