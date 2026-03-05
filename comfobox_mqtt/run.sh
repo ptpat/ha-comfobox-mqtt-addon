@@ -154,10 +154,11 @@ done
 REAL_PTY="$(readlink -f "$SERIAL_DEV" 2>/dev/null || echo "$SERIAL_DEV")"
 chmod 666 "$REAL_PTY" 2>/dev/null || true
 
-# Config mit dem Symlink-Pfad patchen
+# Config mit dem ECHTEN PTY-Pfad patchen (nicht Symlink!)
+# Mono's isatty() schlägt auf Symlinks fehl — braucht echtes /dev/pts/X
 for CFG in "$APPDIR"/*.config; do
     [ -f "$CFG" ] || continue
-    patch_xml_value "Port" "$SERIAL_DEV" "$CFG"
+    patch_xml_value "Port" "$REAL_PTY" "$CFG"
 done
 
 # ── Mono: RF77 ComfoBoxMqttConsole starten ────────────────────────────────────
