@@ -1,78 +1,98 @@
-# ComfoBox MQTT Bridge
+# ComfoBox MQTT Bridge — Home Assistant Add-on
 
-Home Assistant Add-on für die Zehnder ComfoBox Series 5 (ELESTA-Controller) via Waveshare RS485/TCP-Adapter.
+Home Assistant add-on for the **Zehnder ComfoBox Series 5** (ELESTA controller) via a Waveshare RS485/Ethernet adapter.
 
-## Architektur
+## Architecture
 
 ```
-ComfoBox (RS485/MSTP BACnet)
-    ↕
-Waveshare RS485/Ethernet-Adapter (TCP)
-    ↕
-socat (virtueller serieller Port /tmp/comfobox)
-    ↕
-RF77 ComfoBox2Mqtt (Mono/.NET)
-    ↕
-MQTT Broker (Mosquitto)
-    ↕
+Zehnder ComfoBox Series 5
+  │  RS485 / BACnet MSTP
+  │
+Waveshare RS485-to-Ethernet adapter  (TCP)
+  │
+socat  →  virtual serial port  /tmp/comfobox
+  │
+RF77 ComfoBox2Mqtt  (Mono / .NET)
+  │  MQTT
+MQTT Broker  (Mosquitto)
+  │
 Home Assistant
 ```
 
-## Voraussetzungen
+## Requirements
 
-- Zehnder ComfoBox Series 5 mit ELESTA-Controller
-- [Waveshare RS485/Ethernet-Adapter](https://www.waveshare.com/rs485-to-eth.htm) parallel an den RS485-Bus der ComfoBox angeschlossen
-- MQTT Broker (z.B. Mosquitto Add-on in HA)
-- Home Assistant auf **amd64** oder **aarch64** (Mono läuft nicht auf armv7)
+| Component | Details |
+|---|---|
+| Heating unit | Zehnder ComfoBox Series 5 with ELESTA controller |
+| Adapter | Waveshare RS485-to-ETH, wired in parallel to the ComfoBox RS485 bus |
+| MQTT broker | Mosquitto add-on (or any external broker) |
+| HA architecture | **amd64 or aarch64 only** — Mono does not run on armv7 |
 
 ## Installation
 
-1. In Home Assistant: **Einstellungen → Add-ons → Add-on Store → ⋮ → Repositories**
-2. Repository URL hinzufügen: `https://github.com/ptpat/ha-comfobox-mqtt-addon`
-3. Add-on **ComfoBox MQTT Bridge** installieren
+1. In Home Assistant go to **Settings → Add-ons → Add-on Store → ⋮ → Repositories**
+2. Add repository URL: `https://github.com/ptpat/ha-comfobox-mqtt-addon`
+3. Install **ComfoBox MQTT Bridge**
+4. Configure the add-on (see below) and start it
 
-## Konfiguration
+## Configuration
 
-| Parameter | Beschreibung | Standard |
+| Option | Description | Default |
 |---|---|---|
-| `waveshare_host` | IP des Waveshare-Adapters | — |
-| `waveshare_port` | TCP-Port des Waveshare-Adapters | `8899` |
-| `baudrate` | RS485-Baudrate (muss mit ComfoBox übereinstimmen) | `76800` |
-| `mqtt_host` | MQTT Broker | `core-mosquitto` |
-| `mqtt_port` | MQTT Port | `1883` |
-| `mqtt_user` | MQTT Benutzername (optional) | — |
-| `mqtt_pass` | MQTT Passwort (optional) | — |
-| `mqtt_base_topic` | Basis-Topic für alle Werte | `ComfoBox` |
-| `bacnet_master_id` | BACnet Device-ID der ComfoBox | `1` |
-| `bacnet_client_id` | BACnet ID dieses Bridges | `3` |
+| `waveshare_host` | IP address or hostname of the Waveshare adapter | *(required)* |
+| `waveshare_port` | TCP port of the Waveshare adapter | `8899` |
+| `baudrate` | RS485 baudrate — must match the ComfoBox OEM setting | `76800` |
+| `mqtt_host` | MQTT broker hostname | `core-mosquitto` |
+| `mqtt_port` | MQTT broker port | `1883` |
+| `mqtt_user` | MQTT username (leave empty if no auth) | *(optional)* |
+| `mqtt_pass` | MQTT password (leave empty if no auth) | *(optional)* |
+| `mqtt_base_topic` | Root topic for all ComfoBox values | `ComfoBox` |
+| `bacnet_master_id` | BACnet device ID of the ComfoBox (check OEM menu) | `1` |
+| `bacnet_client_id` | BACnet ID of this bridge on the MSTP bus | `3` |
 
-### Baudrate ermitteln
+### Finding the correct baudrate
 
-Die Baudrate der ComfoBox kann im OEM-Menü eingesehen werden. Typische Werte sind `38400` oder `76800`.
+The ComfoBox baudrate is visible in the **OEM menu** of the controller. Common values are `38400` and `76800`. The Waveshare adapter must be configured to the same baudrate.
 
 ### BACnet IDs
 
-Die `bacnet_master_id` ist die Device-ID der ComfoBox auf dem MSTP-Bus (üblicherweise `1`).
-Die `bacnet_client_id` muss eine andere, freie ID auf dem Bus sein (Standard `3`).
+- `bacnet_master_id` — the device ID the ComfoBox uses on the MSTP bus (usually `1`)
+- `bacnet_client_id` — the ID this bridge uses on the bus; must be **different** from the master ID (default `3`)
+
+When the bridge connects successfully, the ComfoBox display will show an **hourglass symbol** — confirming an active BACnet client is present on the bus.
 
 ## MQTT Topics
 
-Nach dem Start publiziert das Add-on alle ComfoBox-Werte unter dem konfigurierten Base-Topic, z.B.:
+After startup, all ComfoBox values are published under the configured base topic, for example:
 
 ```
 ComfoBox/Climate/ActualTemperature_WaterHeater
 ComfoBox/Climate/SetPoint_RoomTemperature
 ComfoBox/Ventilation/FanSpeed
-...
+ComfoBox/Special/NumberOfWritesPer24h
 ```
 
-Schreibbare Werte können über das `/Set`-Suffix gesetzt werden:
+Writable values accept commands via the `/Set` suffix:
+
 ```
-ComfoBox/Climate/SetPoint_RoomTemperature/Set  → 21.5
+ComfoBox/Climate/SetPoint_RoomTemperature/Set  →  21.5
 ```
 
-Eine vollständige Topic-Liste findet sich in der [RF77 Dokumentation](https://github.com/RF77/comfobox-mqtt/blob/master/docs/topics.md).
+> ⚠️ RF77 writes values to the EEPROM of the ComfoBox. The EEPROM has a limited write cycle life (~1,000,000 writes). Avoid automations that write values at high frequency.
 
-## Basiert auf
+A full topic list is available in the [RF77 documentation](https://github.com/RF77/comfobox-mqtt/blob/master/docs/topics.md).
 
-- [RF77/comfobox-mqtt](https://github.com/RF77/comfobox-mqtt) — BACnet/MSTP zu MQTT Bridge (.NET/Mono)
+## Troubleshooting
+
+Check the add-on log under **Settings → Add-ons → ComfoBox MQTT Bridge → Log**.
+
+| Log message | Cause | Fix |
+|---|---|---|
+| `PTY not ready after 15s` | Cannot reach Waveshare adapter | Check IP, port and network connectivity |
+| `Exception connecting to the broker` | Wrong MQTT host/port or credentials | Verify `mqtt_host`, `mqtt_port`, `mqtt_user`, `mqtt_pass` |
+| `Didn't get any messages from the Bacnet Master` | BACnet communication failure | Check baudrate and BACnet IDs match the ComfoBox OEM settings |
+| `mono crashed` | Runtime error | Check full log for the exception detail above this message |
+
+## Based on
+
+- [RF77/comfobox-mqtt](https://github.com/RF77/comfobox-mqtt) — BACnet/MSTP to MQTT bridge (.NET/Mono), version 0.4.0
