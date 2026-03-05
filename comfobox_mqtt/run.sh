@@ -23,8 +23,6 @@ WAVESHARE_PORT="$(get_opt waveshare_port "0")"
 BAUDRATE="$(get_opt baudrate "76800")"
 MQTT_HOST="$(get_opt mqtt_host "core-mosquitto")"
 MQTT_PORT="$(get_opt mqtt_port "1883")"
-MQTT_USER="$(get_opt mqtt_user "")"
-MQTT_PASS="$(get_opt mqtt_pass "")"
 MQTT_BASE_TOPIC="$(get_opt mqtt_base_topic "ComfoBox")"
 BACNET_MASTER_ID="$(get_opt bacnet_master_id "1")"
 BACNET_CLIENT_ID="$(get_opt bacnet_client_id "3")"
@@ -112,8 +110,12 @@ echo "[INFO] Setze /dev/ttyS0 Berechtigungen..."
 chmod 666 "$SERIAL_DEV" 2>/dev/null || true
 
 echo "[INFO] Starte socat: ${WAVESHARE_HOST}:${WAVESHARE_PORT} ↔ ${SERIAL_DEV}"
+
+# Baudrate vorab mit stty setzen (socat Alpine kennt keine b76800 Option)
+stty -F "${SERIAL_DEV}" "${BAUDRATE}" raw 2>/dev/null || true
+
 socat \
-    "${SERIAL_DEV},b${BAUDRATE},raw,echo=0" \
+    "${SERIAL_DEV},raw,echo=0" \
     "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
     &
 SOCAT_PID=$!
