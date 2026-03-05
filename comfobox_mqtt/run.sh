@@ -104,57 +104,61 @@ for CFG in "$APPDIR"/*.config; do
 done
 
 # ── Cleanup Handler ───────────────────────────────────────────────────────────
-SOCAT_PID=""
+SER2NET_PID=""
 MONO_PID=""
 
 cleanup() {
     echo "[INFO] Shutdown: stoppe Prozesse..."
-    [ -n "$MONO_PID" ]  && kill "$MONO_PID"  2>/dev/null || true
-    [ -n "$SOCAT_PID" ] && kill "$SOCAT_PID" 2>/dev/null || true
+    [ -n "$MONO_PID" ]    && kill "$MONO_PID"    2>/dev/null || true
+    [ -n "$SER2NET_PID" ] && kill "$SER2NET_PID" 2>/dev/null || true
+    rm -f /tmp/ser2net.conf
     exit 0
 }
 trap cleanup SIGTERM SIGINT
 
-# ── Socat: virtueller serieller Port ─────────────────────────────────────────
-# socat gibt den echten PTY-Pfad (z.B. /dev/pts/2) auf stderr aus.
-# Wir lesen diesen Pfad und patchen die Config damit — kein Symlink nötig.
-echo "[INFO] Starte socat PTY-Bridge: ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
+# ── ser2net: TCP → virtueller serieller Port ──────────────────────────────────
+# ser2net erstellt /dev/ttyV0 als echtes TTY-Device das Mono/dotnet korrekt
+# öffnen kann. socat PTY schlug fehl weil Alpine/Mono isatty() auf PTY-Slave
+# ablehnt ("Not a tty").
+SERIAL_DEV="/dev/ttyV0"
 
-# PTY-Devices vor socat-Start merken
-PTS_BEFORE="$(ls /dev/pts/ 2>/dev/null | grep -E '^[0-9]+$' | sort -n || true)"
+echo "[INFO] Starte ser2net: ${WAVESHARE_HOST}:${WAVESHARE_PORT} → ${SERIAL_DEV}"
 
-socat \
-    "pty,raw,echo=0" \
-    "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
-    &
-SOCAT_PID=$!
+# ser2net Konfigurationsdatei erstellen
+cat > /tmp/ser2net.conf << EOF
+connection: &con1
+  accepter: serialdev,${SERIAL_DEV},${BAUDRATE}n81
+  connector: tcp,${WAVESHARE_HOST},${WAVESHARE_PORT}
+  options:
+    kickolduser: true
+EOF
 
-# Warten bis ein neues PTY-Device erscheint (max 15 Sekunden)
-echo "[INFO] Warte auf PTY..."
-REAL_PTY=""
+# ser2net starten
+ser2net -c /tmp/ser2net.conf -n &
+SER2NET_PID=$!
+
+# Warten bis /dev/ttyV0 erscheint (max 15 Sekunden)
+echo "[INFO] Warte auf ${SERIAL_DEV}..."
 for i in $(seq 1 15); do
-    PTS_AFTER="$(ls /dev/pts/ 2>/dev/null | grep -E '^[0-9]+$' | sort -n || true)"
-    NEW_PTS="$(comm -13 <(echo "$PTS_BEFORE") <(echo "$PTS_AFTER") | head -n1 || true)"
-    if [ -n "$NEW_PTS" ]; then
-        REAL_PTY="/dev/pts/${NEW_PTS}"
-        echo "[INFO] PTY bereit nach ${i}s: ${REAL_PTY}"
+    if [ -e "$SERIAL_DEV" ]; then
+        echo "[INFO] ${SERIAL_DEV} bereit nach ${i}s"
         break
     fi
     sleep 1
     if [ "$i" -eq 15 ]; then
-        echo "[ERROR] PTY nicht bereit nach 15s"
-        echo "[DEBUG] socat PID=${SOCAT_PID} noch aktiv: $(kill -0 "$SOCAT_PID" 2>/dev/null && echo ja || echo nein)"
-        echo "[DEBUG] /dev/pts vorher: $(echo "$PTS_BEFORE" | tr '\n' ' ')"
-        echo "[DEBUG] /dev/pts nachher: $(ls /dev/pts/ 2>/dev/null | tr '\n' ' ')"
-        kill "$SOCAT_PID" 2>/dev/null || true
+        echo "[ERROR] ${SERIAL_DEV} nicht bereit nach 15s"
+        echo "[DEBUG] ser2net PID=${SER2NET_PID} aktiv: $(kill -0 "$SER2NET_PID" 2>/dev/null && echo ja || echo nein)"
+        echo "[DEBUG] /dev Inhalt (tty*):"
+        ls -la /dev/tty* 2>/dev/null || echo "(keine tty devices)"
+        kill "$SER2NET_PID" 2>/dev/null || true
         exit 1
     fi
 done
 
-# Config nochmals patchen mit dem echten PTY-Pfad
+# Config mit /dev/ttyV0 patchen
 for CFG in "$APPDIR"/*.config; do
     [ -f "$CFG" ] || continue
-    patch_xml_value "Port" "$REAL_PTY" "$CFG"
+    patch_xml_value "Port" "$SERIAL_DEV" "$CFG"
 done
 
 # ── Mono: RF77 ComfoBoxMqttConsole starten ────────────────────────────────────
@@ -163,30 +167,17 @@ cd "$APPDIR"
 mono "${EXE_PATH}" &
 MONO_PID=$!
 
-echo "[INFO] Läuft — socat PID=${SOCAT_PID}, mono PID=${MONO_PID}"
+echo "[INFO] Läuft — ser2net PID=${SER2NET_PID}, mono PID=${MONO_PID}"
 
-# Beide Prozesse überwachen — wenn einer stirbt, alles stoppen
-wait_and_monitor() {
-    while true; do
-        # Prüfe ob socat noch läuft
-        if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
-            echo "[ERROR] socat ist abgestürzt — starte neu in 5s..."
-            sleep 5
-            PTS_BEFORE="$(ls /dev/pts/ 2>/dev/null | grep -E '^[0-9]+$' | sort -n || true)"
-            socat \
-                "pty,raw,echo=0" \
-                "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
-                &
-            SOCAT_PID=$!
-            echo "[INFO] socat neu gestartet PID=${SOCAT_PID}"
-        fi
-        # Prüfe ob mono noch läuft
-        if ! kill -0 "$MONO_PID" 2>/dev/null; then
-            echo "[ERROR] mono ist abgestürzt — beende Addon"
-            cleanup
-        fi
-        sleep 10
-    done
-}
-
-wait_and_monitor
+# Prozesse überwachen
+while true; do
+    if ! kill -0 "$SER2NET_PID" 2>/dev/null; then
+        echo "[ERROR] ser2net abgestürzt — beende Addon"
+        cleanup
+    fi
+    if ! kill -0 "$MONO_PID" 2>/dev/null; then
+        echo "[ERROR] mono abgestürzt — beende Addon"
+        cleanup
+    fi
+    sleep 10
+done
