@@ -27,6 +27,8 @@ MQTT_BASE_TOPIC="$(get_opt mqtt_base_topic "ComfoBox")"
 BACNET_MASTER_ID="$(get_opt bacnet_master_id "1")"
 BACNET_CLIENT_ID="$(get_opt bacnet_client_id "3")"
 
+PTY_LINK="/tmp/comfobox_pty"
+
 echo "[INFO] Waveshare:    ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
 echo "[INFO] Baudrate:     ${BAUDRATE}"
 echo "[INFO] MQTT:         ${MQTT_HOST}:${MQTT_PORT}"
@@ -60,11 +62,63 @@ fi
 APPDIR="$(dirname "$EXE_PATH")"
 echo "[INFO] EXE gefunden: $EXE_PATH"
 
-# ── RF77 Config-Dateien patchen ──────────────────────────────────────────────────
-# HINWEIS: Der Port-Wert wird von Mono intern über das PTY gesetzt wenn
-# socat Mono via EXEC startet — der Port-Wert in der config ist dann
-# der tatsächliche Symlink/PTY den socat anlegt. Wir patchen trotzdem
-# alle anderen Werte korrekt.
+# ── Cleanup Handler ──────────────────────────────────────────────────────────────
+SOCAT_PID=""
+MONO_PID=""
+
+cleanup() {
+    echo "[INFO] Shutdown: stoppe Prozesse..."
+    [ -n "$MONO_PID" ]  && kill "$MONO_PID"  2>/dev/null || true
+    [ -n "$SOCAT_PID" ] && kill "$SOCAT_PID" 2>/dev/null || true
+    rm -f "$PTY_LINK" 2>/dev/null || true
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
+
+# ── Schritt 1: socat PTY-Bridge starten ─────────────────────────────────────────
+# socat erstellt PTY-Paar und legt Symlink an.
+# rawer    → minimale TTY-Verarbeitung, keine Sonderzeichen-Interpretation
+# echo=0   → kein lokales Echo
+rm -f "$PTY_LINK" 2>/dev/null || true
+
+echo "[INFO] Starte socat PTY-Bridge: ${WAVESHARE_HOST}:${WAVESHARE_PORT} → ${PTY_LINK}"
+socat \
+    "PTY,link=${PTY_LINK},rawer,echo=0" \
+    "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
+    &
+SOCAT_PID=$!
+
+# Warten bis socat den Symlink angelegt hat (max. 10s)
+echo "[INFO] Warte auf ${PTY_LINK}..."
+for i in $(seq 1 10); do
+    if [ -L "$PTY_LINK" ]; then
+        echo "[INFO] ${PTY_LINK} bereit nach ${i}s"
+        break
+    fi
+    if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
+        echo "[ERROR] socat sofort abgestürzt — Waveshare erreichbar? ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
+        exit 1
+    fi
+    sleep 1
+done
+
+if [ ! -L "$PTY_LINK" ]; then
+    echo "[ERROR] ${PTY_LINK} nicht bereit nach 10s"
+    kill "$SOCAT_PID" 2>/dev/null || true
+    exit 1
+fi
+
+# Echten /dev/pts/X Pfad auslesen
+REAL_PTY="$(readlink -f "$PTY_LINK")"
+echo "[INFO] PTY bereit: ${PTY_LINK} → ${REAL_PTY}"
+
+# PTY-Berechtigungen setzen
+chmod 666 "$REAL_PTY" 2>/dev/null || true
+
+# ── Schritt 2: RF77 Config mit echtem /dev/pts/X patchen ────────────────────────
+# Mono öffnet den Port direkt über den konfigurierten Pfad.
+# Wir übergeben den echten /dev/pts/X — das ist ein echter PTY-Device-Node,
+# isatty() besteht weil es ein character device mit TTY-Semantik ist.
 patch_xml_value() {
     local name="$1"
     local newval="$2"
@@ -80,9 +134,7 @@ patch_xml_value() {
 for CFG in "$APPDIR"/*.config; do
     [ -f "$CFG" ] || continue
     echo "[INFO] Patching: $(basename "$CFG")"
-    # Port wird von socat's EXEC+PTY gesetzt — stdout/stdin von Mono ist das PTY
-    # Trotzdem einen plausiblen Wert setzen falls Mono ihn direkt liest
-    patch_xml_value "Port"              "/dev/tty"          "$CFG"
+    patch_xml_value "Port"              "$REAL_PTY"         "$CFG"
     patch_xml_value "Baudrate"          "$BAUDRATE"         "$CFG"
     patch_xml_value "BacnetMasterId"    "$BACNET_MASTER_ID" "$CFG"
     patch_xml_value "BacnetClientId"    "$BACNET_CLIENT_ID" "$CFG"
@@ -91,46 +143,22 @@ for CFG in "$APPDIR"/*.config; do
     patch_xml_value "WriteTopicsToFile" "False"             "$CFG"
 done
 
-# ── Cleanup Handler ──────────────────────────────────────────────────────────────
-SOCAT_PID=""
-
-cleanup() {
-    echo "[INFO] Shutdown: stoppe Prozesse..."
-    [ -n "$SOCAT_PID" ] && kill "$SOCAT_PID" 2>/dev/null || true
-    exit 0
-}
-trap cleanup SIGTERM SIGINT
-
-# ── socat: TCP Waveshare ↔ EXEC(mono) mit echtem PTY ────────────────────────────
-#
-# Ansatz: socat forkt Mono direkt als Kind-Prozess und verbindet dessen
-# stdin/stdout über ein echtes PTY mit dem TCP-Stream zum Waveshare.
-#
-#   pty      → socat erstellt ein PTY-Paar für den EXEC-Prozess
-#   setsid   → Mono wird in einer neuen Session gestartet
-#   ctty     → das PTY wird als Kontrollterminal gesetzt
-#
-# Damit besteht isatty() in Mono garantiert — Mono "denkt" es läuft
-# an einem echten seriellen Terminal.
-#
-# Mono liest/schreibt auf stdin/stdout → socat leitet alles transparent
-# zum Waveshare TCP-Server weiter.
-
+# ── Schritt 3: Mono starten ──────────────────────────────────────────────────────
+echo "[INFO] Starte mono ${EXE_PATH}"
 cd "$APPDIR"
+mono "${EXE_PATH}" &
+MONO_PID=$!
 
-echo "[INFO] Starte socat EXEC(mono) ↔ TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT}"
-socat \
-    "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
-    "EXEC:mono ${EXE_PATH},pty,setsid,ctty" \
-    &
-SOCAT_PID=$!
-
-echo "[INFO] socat gestartet (PID=${SOCAT_PID})"
+echo "[INFO] Läuft — socat PID=${SOCAT_PID}, mono PID=${MONO_PID}"
 
 # ── Prozessüberwachung ───────────────────────────────────────────────────────────
 while true; do
     if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
-        echo "[ERROR] socat/mono abgestürzt — beende Addon"
+        echo "[ERROR] socat abgestürzt — beende Addon"
+        cleanup
+    fi
+    if ! kill -0 "$MONO_PID" 2>/dev/null; then
+        echo "[ERROR] mono abgestürzt — beende Addon"
         cleanup
     fi
     sleep 10
