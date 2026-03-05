@@ -10,10 +10,10 @@ Zehnder ComfoBox Series 5
   │
 Waveshare RS485-to-Ethernet adapter  (TCP)
   │
-socat  →  virtual serial port  /tmp/comfobox
+socat  →  /dev/ttyS0  (virtual serial device)
   │
 RF77 ComfoBox2Mqtt  (Mono / .NET)
-  │  MQTT
+  │  MQTT (anonymous)
 MQTT Broker  (Mosquitto)
   │
 Home Assistant
@@ -25,7 +25,7 @@ Home Assistant
 |---|---|
 | Heating unit | Zehnder ComfoBox Series 5 with ELESTA controller |
 | Adapter | Waveshare RS485-to-ETH, wired in parallel to the ComfoBox RS485 bus |
-| MQTT broker | Mosquitto add-on (or any external broker) |
+| MQTT broker | Mosquitto add-on **configured to allow anonymous connections** |
 | HA architecture | **amd64 or aarch64 only** — Mono does not run on armv7 |
 
 ## Installation
@@ -34,6 +34,27 @@ Home Assistant
 2. Add repository URL: `https://github.com/ptpat/ha-comfobox-mqtt-addon`
 3. Install **ComfoBox MQTT Bridge**
 4. Configure the add-on (see below) and start it
+
+## ⚠️ Mosquitto: Anonymous Access Required
+
+The RF77 `ComfoBoxMqttConsole` does **not** support MQTT authentication. It always connects anonymously (no username/password).
+
+You must configure the **Mosquitto** add-on to accept anonymous connections:
+
+1. In Mosquitto add-on configuration, enable **Customize**:
+   ```yaml
+   customize:
+     active: true
+     folder: mosquitto
+   ```
+2. Create `/share/mosquitto/mosquitto.conf` with:
+   ```
+   allow_anonymous true
+   ```
+3. Restart the Mosquitto add-on.
+
+> If Mosquitto requires authentication, the add-on log will show:  
+> `Exception connecting to the broker`
 
 ## Configuration
 
@@ -44,8 +65,6 @@ Home Assistant
 | `baudrate` | RS485 baudrate — must match the ComfoBox OEM setting | `76800` |
 | `mqtt_host` | MQTT broker hostname | `core-mosquitto` |
 | `mqtt_port` | MQTT broker port | `1883` |
-| `mqtt_user` | MQTT username (leave empty if no auth) | *(optional)* |
-| `mqtt_pass` | MQTT password (leave empty if no auth) | *(optional)* |
 | `mqtt_base_topic` | Root topic for all ComfoBox values | `ComfoBox` |
 | `bacnet_master_id` | BACnet device ID of the ComfoBox (check OEM menu) | `1` |
 | `bacnet_client_id` | BACnet ID of this bridge on the MSTP bus | `3` |
@@ -88,10 +107,10 @@ Check the add-on log under **Settings → Add-ons → ComfoBox MQTT Bridge → L
 
 | Log message | Cause | Fix |
 |---|---|---|
-| `PTY not ready after 15s` | Cannot reach Waveshare adapter | Check IP, port and network connectivity |
-| `Exception connecting to the broker` | Wrong MQTT host/port or credentials | Verify `mqtt_host`, `mqtt_port`, `mqtt_user`, `mqtt_pass` |
+| `socat konnte nicht gestartet werden` | Cannot reach Waveshare adapter | Check IP, port, and network connectivity |
+| `Exception connecting to the broker` | Mosquitto requires authentication (RF77 connects anonymously) | Enable `allow_anonymous true` in Mosquitto config (see above) |
 | `Didn't get any messages from the Bacnet Master` | BACnet communication failure | Check baudrate and BACnet IDs match the ComfoBox OEM settings |
-| `mono crashed` | Runtime error | Check full log for the exception detail above this message |
+| `mono abgestürzt` | Runtime error | Check full log for the exception detail above this message |
 
 ## Credits & Licensing
 
