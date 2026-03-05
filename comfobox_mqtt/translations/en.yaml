@@ -1,34 +1,31 @@
 configuration:
-  use_socat:
-    name: Use socat TCP->PTY bridge
-    description: Enable when using a Waveshare TCP-to-Serial gateway.
   waveshare_host:
-    name: Waveshare host / IP
+    name: Waveshare Host / IP
+    description: IP address or hostname of the Waveshare RS485/Ethernet adapter.
   waveshare_port:
-    name: Waveshare TCP port
-  serial_port:
-    name: Serial port (PTY path)
-    description: Path created by socat inside the add-on (e.g. /tmp/comfobox).
+    name: Waveshare TCP Port
+    description: TCP port of the Waveshare adapter (Waveshare default is 8899).
   baudrate:
     name: Baudrate
-    description: RS485/MSTP baudrate (typical 38400).
-
+    description: RS485/MSTP baudrate. Must match the ComfoBox configuration (typically 38400 or 76800). Check the OEM menu of the ComfoBox.
   mqtt_host:
-    name: MQTT host
-    description: Usually core-mosquitto (Supervisor add-on).
+    name: MQTT Broker Host
+    description: Hostname or IP of the MQTT broker. When using the Mosquitto add-on, use "core-mosquitto".
   mqtt_port:
-    name: MQTT port
+    name: MQTT Broker Port
+    description: TCP port of the MQTT broker (default 1883).
   mqtt_user:
-    name: MQTT username
+    name: MQTT Username
+    description: Optional. Leave empty if no authentication is required.
   mqtt_pass:
-    name: MQTT password
+    name: MQTT Password
+    description: Optional. Leave empty if no authentication is required.
   mqtt_base_topic:
-    name: MQTT base topic
-    description: Root topic used by RF77 (default ComfoBox).
-
+    name: MQTT Base Topic
+    description: Root topic for all ComfoBox values (default "ComfoBox").
   bacnet_master_id:
     name: BACnet Master Device ID
-    description: DeviceId reported by the ComfoBox master (e.g. 11).
+    description: BACnet device ID of the ComfoBox (default 1). Visible in the OEM menu of the ComfoBox.
   bacnet_client_id:
     name: BACnet Client ID
-    description: ClientId used by the bridge on the MSTP bus (default 3).
+    description: BACnet ID of this bridge on the MSTP bus (default 3). Must differ from the Master ID.ClientId used by the bridge on the MSTP bus (default 3).
