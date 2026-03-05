@@ -27,26 +27,21 @@ MQTT_BASE_TOPIC="$(get_opt mqtt_base_topic "ComfoBox")"
 BACNET_MASTER_ID="$(get_opt bacnet_master_id "1")"
 BACNET_CLIENT_ID="$(get_opt bacnet_client_id "3")"
 
-# /dev/ttyS0: echter serieller Port im Container (via devices: in config.yaml freigegeben)
-# socat bridgt bidirektional: Mono liest/schreibt /dev/ttyS0,
-# socat leitet alles an den Waveshare TCP-Server weiter.
-SERIAL_DEV="/dev/ttyS0"
+# socat erstellt ein PTY-Paar und legt einen Symlink unter PTY_LINK an.
+# Mono öffnet PTY_LINK → das ist die Slave-Seite des PTY → isatty() besteht.
+# /dev/ttyS0 wird NICHT verwendet (Dummy-Port ohne echte UART-Hardware auf HA Green).
+PTY_LINK="/tmp/comfobox_pty"
 
 echo "[INFO] Waveshare:    ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
 echo "[INFO] Baudrate:     ${BAUDRATE}"
 echo "[INFO] MQTT:         ${MQTT_HOST}:${MQTT_PORT}"
 echo "[INFO] MQTT topic:   ${MQTT_BASE_TOPIC}"
 echo "[INFO] BACnet:       master=${BACNET_MASTER_ID} client=${BACNET_CLIENT_ID}"
-echo "[INFO] Serial dev:   ${SERIAL_DEV}"
+echo "[INFO] PTY link:     ${PTY_LINK}"
 
 # ── Validierung ──────────────────────────────────────────────────────────────────
 if [ -z "$WAVESHARE_HOST" ] || [ "$WAVESHARE_PORT" = "0" ]; then
     echo "[ERROR] waveshare_host und waveshare_port müssen konfiguriert sein!"
-    exit 1
-fi
-
-if [ ! -e "$SERIAL_DEV" ]; then
-    echo "[ERROR] ${SERIAL_DEV} nicht vorhanden — devices-Eintrag in config.yaml prüfen!"
     exit 1
 fi
 
@@ -87,13 +82,13 @@ patch_xml_value() {
 for CFG in "$APPDIR"/*.config; do
     [ -f "$CFG" ] || continue
     echo "[INFO] Patching: $(basename "$CFG")"
-    patch_xml_value "Port"               "$SERIAL_DEV"      "$CFG"
-    patch_xml_value "Baudrate"           "$BAUDRATE"        "$CFG"
-    patch_xml_value "BacnetMasterId"     "$BACNET_MASTER_ID" "$CFG"
-    patch_xml_value "BacnetClientId"     "$BACNET_CLIENT_ID" "$CFG"
-    patch_xml_value "MqttBrokerAddress"  "$MQTT_HOST"       "$CFG"
-    patch_xml_value "BaseTopic"          "$MQTT_BASE_TOPIC" "$CFG"
-    patch_xml_value "WriteTopicsToFile"  "False"            "$CFG"
+    patch_xml_value "Port"              "$PTY_LINK"         "$CFG"
+    patch_xml_value "Baudrate"          "$BAUDRATE"         "$CFG"
+    patch_xml_value "BacnetMasterId"    "$BACNET_MASTER_ID" "$CFG"
+    patch_xml_value "BacnetClientId"    "$BACNET_CLIENT_ID" "$CFG"
+    patch_xml_value "MqttBrokerAddress" "$MQTT_HOST"        "$CFG"
+    patch_xml_value "BaseTopic"         "$MQTT_BASE_TOPIC"  "$CFG"
+    patch_xml_value "WriteTopicsToFile" "False"             "$CFG"
 done
 
 # ── Cleanup Handler ──────────────────────────────────────────────────────────────
@@ -104,32 +99,56 @@ cleanup() {
     echo "[INFO] Shutdown: stoppe Prozesse..."
     [ -n "$MONO_PID" ]  && kill "$MONO_PID"  2>/dev/null || true
     [ -n "$SOCAT_PID" ] && kill "$SOCAT_PID" 2>/dev/null || true
+    rm -f "$PTY_LINK" 2>/dev/null || true
     exit 0
 }
 trap cleanup SIGTERM SIGINT
 
-# ── socat: TCP-Waveshare ↔ /dev/ttyS0 ───────────────────────────────────────────
-# Alpine socat kennt keine b76800-Option → Baudrate vorab mit stty setzen,
-# socat dann ohne Baudrate-Parameter aufrufen.
-echo "[INFO] Setze ${SERIAL_DEV} Baudrate auf ${BAUDRATE}..."
-stty -F "${SERIAL_DEV}" "${BAUDRATE}" raw cs8 -cstopb -parenb 2>/dev/null || true
+# ── socat: PTY ↔ TCP Waveshare ───────────────────────────────────────────────────
+# socat erstellt ein PTY-Paar:
+#   - Master-Seite: socat hält sie offen und leitet Bytes zum TCP-Server
+#   - Slave-Seite:  wird als Symlink PTY_LINK im Dateisystem sichtbar
+# Mono öffnet PTY_LINK → echter PTY → isatty() besteht → BACnet/MSTP läuft
+#
+# PTY-Optionen:
+#   link=      → Symlink auf die Slave-Seite anlegen
+#   waitslave  → socat wartet bis jemand (Mono) die Slave-Seite öffnet
+#   echo=0     → kein lokales Echo auf dem PTY
+#
+# Baudrate wird von Mono selbst über die .config gesetzt (76800).
+# socat muss sie nicht kennen — es leitet nur transparent Bytes weiter.
 
-echo "[INFO] Starte socat: ${WAVESHARE_HOST}:${WAVESHARE_PORT} ↔ ${SERIAL_DEV}"
+rm -f "$PTY_LINK" 2>/dev/null || true
+
+echo "[INFO] Starte socat PTY-Bridge: ${WAVESHARE_HOST}:${WAVESHARE_PORT} → ${PTY_LINK}"
 socat \
-    "${SERIAL_DEV}" \
+    "PTY,link=${PTY_LINK},echo=0" \
     "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
     &
 SOCAT_PID=$!
 
-echo "[INFO] socat gestartet (PID=${SOCAT_PID}), warte 3s..."
-sleep 3
+# Warten bis socat den Symlink angelegt hat (max. 10s)
+echo "[INFO] Warte auf ${PTY_LINK}..."
+for i in $(seq 1 10); do
+    if [ -e "$PTY_LINK" ]; then
+        echo "[INFO] ${PTY_LINK} bereit nach ${i}s"
+        break
+    fi
+    if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
+        echo "[ERROR] socat ist sofort abgestürzt — Waveshare erreichbar? ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
+        exit 1
+    fi
+    sleep 1
+done
 
-if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
-    echo "[ERROR] socat konnte nicht gestartet werden — Waveshare erreichbar? ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
+if [ ! -e "$PTY_LINK" ]; then
+    echo "[ERROR] ${PTY_LINK} nicht bereit nach 10s"
+    kill "$SOCAT_PID" 2>/dev/null || true
     exit 1
 fi
 
-echo "[INFO] socat läuft — Bridge aktiv"
+REAL_PTY="$(readlink -f "$PTY_LINK" 2>/dev/null || echo "unbekannt")"
+echo "[INFO] PTY bereit: ${PTY_LINK} → ${REAL_PTY}"
 
 # ── Mono: RF77 ComfoBoxMqttConsole starten ───────────────────────────────────────
 echo "[INFO] Starte mono ${EXE_PATH}"
