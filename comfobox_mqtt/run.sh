@@ -113,7 +113,7 @@ chmod 666 "$SERIAL_DEV" 2>/dev/null || true
 
 echo "[INFO] Starte socat: ${WAVESHARE_HOST}:${WAVESHARE_PORT} ↔ ${SERIAL_DEV}"
 socat \
-    "${SERIAL_DEV},b${BAUDRATE},rawer,nonblock" \
+    "${SERIAL_DEV},b${BAUDRATE},raw,echo=0" \
     "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
     &
 SOCAT_PID=$!
