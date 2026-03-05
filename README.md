@@ -1,124 +1,165 @@
 # ComfoBox MQTT Bridge — Home Assistant Add-on
 
-Home Assistant add-on for the **Zehnder ComfoBox Series 5** (ELESTA controller) via a Waveshare RS485/Ethernet adapter.
+Verbindet eine **Zehnder ComfoBox Series 5 (ELESTA)** über einen Waveshare RS485/Ethernet-Adapter mit Home Assistant via MQTT. Basiert auf dem [RF77 ComfoBox2Mqtt](https://github.com/RF77/comfobox-mqtt) Projekt (v0.4.0).
 
-## Architecture
+---
+
+## Architektur
 
 ```
-Zehnder ComfoBox Series 5
-  │  RS485 / BACnet MSTP
+ComfoBox Series 5
+  │ RS485 / BACnet MSTP
+  ▼
+Waveshare RS485-to-ETH (TCP Server, Port 8899)
+  │ TCP
+  ▼
+socat PTY-Bridge (im Add-on Container)
+  │ virtueller serieller Port (/dev/pts/X)
+  ▼
+Mono — RF77 ComfoBoxMqttConsole.exe
+  │ MQTT
+  ▼
+Mosquitto Broker (core-mosquitto)
   │
-Waveshare RS485-to-Ethernet adapter  (TCP)
-  │
-socat  →  /dev/ttyS0  (virtual serial device)
-  │
-RF77 ComfoBox2Mqtt  (Mono / .NET)
-  │  MQTT (anonymous)
-MQTT Broker  (Mosquitto)
-  │
+  ▼
 Home Assistant
 ```
 
-## Requirements
+---
 
-| Component | Details |
-|---|---|
-| Heating unit | Zehnder ComfoBox Series 5 with ELESTA controller |
-| Adapter | Waveshare RS485-to-ETH, wired in parallel to the ComfoBox RS485 bus |
-| MQTT broker | Mosquitto add-on **configured to allow anonymous connections** |
-| HA architecture | **amd64 or aarch64 only** — Mono does not run on armv7 |
+## Voraussetzungen
+
+### Hardware
+- Zehnder ComfoBox Series 5 (ELESTA Steuerung)
+- Waveshare RS485-to-ETH Adapter (z.B. USR-TCP232-306 oder ähnlich)
+- RS485-Kabel: ComfoBox RS485-Port → Waveshare A/B Klemmen
+
+### Waveshare Konfiguration
+Öffne `http://<waveshare-ip>` im Browser (kein Passwort):
+- **Work Mode:** TCP Server
+- **Local Port:** 8899
+- **Baud Rate:** 38400 (muss mit ComfoBox OEM-Einstellung übereinstimmen)
+- **Data Bits:** 8, **Parity:** None, **Stop Bits:** 1
+
+### ComfoBox OEM-Menü
+Die ComfoBox muss auf **38400 Baud** konfiguriert sein (Werkseinstellung ist 76800).
+Zugang über das OEM-Menü der ComfoBox-Bedieneinheit.
+
+### MQTT Broker
+Das Add-on benötigt **anonymen MQTT-Zugang** — RF77 ComfoBoxMqttConsole unterstützt keine MQTT-Authentifizierung.
+
+Mosquitto-Konfiguration (`/share/mosquitto/mosquitto.conf`):
+```
+listener 1883
+allow_anonymous true
+```
+
+---
 
 ## Installation
 
-1. In Home Assistant go to **Settings → Add-ons → Add-on Store → ⋮ → Repositories**
-2. Add repository URL: `https://github.com/ptpat/ha-comfobox-mqtt-addon`
-3. Install **ComfoBox MQTT Bridge**
-4. Configure the add-on (see below) and start it
-
-## ⚠️ Mosquitto: Anonymous Access Required
-
-The RF77 `ComfoBoxMqttConsole` does **not** support MQTT authentication. It always connects anonymously (no username/password).
-
-You must configure the **Mosquitto** add-on to accept anonymous connections:
-
-1. In Mosquitto add-on configuration, enable **Customize**:
-   ```yaml
-   customize:
-     active: true
-     folder: mosquitto
+1. **Repository hinzufügen** in HA unter Settings → Add-ons → Repositories:
    ```
-2. Create `/share/mosquitto/mosquitto.conf` with:
+   https://github.com/ptpat/ha-comfobox-mqtt-addon
    ```
-   allow_anonymous true
-   ```
-3. Restart the Mosquitto add-on.
 
-> If Mosquitto requires authentication, the add-on log will show:  
-> `Exception connecting to the broker`
+2. **Add-on installieren:** ComfoBox MQTT Bridge
 
-## Configuration
+3. **Konfiguration anpassen** (siehe unten)
 
-| Option | Description | Default |
-|---|---|---|
-| `waveshare_host` | IP address or hostname of the Waveshare adapter | *(required)* |
-| `waveshare_port` | TCP port of the Waveshare adapter | `8899` |
-| `baudrate` | RS485 baudrate — must match the ComfoBox OEM setting | `76800` |
-| `mqtt_host` | MQTT broker hostname | `core-mosquitto` |
-| `mqtt_port` | MQTT broker port | `1883` |
-| `mqtt_base_topic` | Root topic for all ComfoBox values | `ComfoBox` |
-| `bacnet_master_id` | BACnet device ID of the ComfoBox (check OEM menu) | `1` |
-| `bacnet_client_id` | BACnet ID of this bridge on the MSTP bus | `3` |
+4. **Add-on starten**
 
-### Finding the correct baudrate
+---
 
-The ComfoBox baudrate is visible in the **OEM menu** of the controller. Common values are `38400` and `76800`. The Waveshare adapter must be configured to the same baudrate.
+## Konfiguration
 
-### BACnet IDs
+| Option | Typ | Default | Beschreibung |
+|--------|-----|---------|--------------|
+| `waveshare_host` | string | — | IP-Adresse des Waveshare Adapters |
+| `waveshare_port` | int | 8899 | TCP-Port des Waveshare Adapters |
+| `baudrate` | int | 38400 | Baudrate (muss mit ComfoBox OEM übereinstimmen) |
+| `mqtt_host` | string | core-mosquitto | MQTT Broker Hostname |
+| `mqtt_port` | int | 1883 | MQTT Broker Port |
+| `mqtt_base_topic` | string | ComfoBox | MQTT Basis-Topic |
+| `bacnet_master_id` | int | 1 | BACnet-Adresse der ComfoBox |
+| `bacnet_client_id` | int | 3 | BACnet-Adresse dieses Clients (muss verschieden von master_id sein) |
 
-- `bacnet_master_id` — the device ID the ComfoBox uses on the MSTP bus (usually `1`)
-- `bacnet_client_id` — the ID this bridge uses on the bus; must be **different** from the master ID (default `3`)
+Beispiel:
+```yaml
+waveshare_host: "192.168.0.24"
+waveshare_port: 8899
+baudrate: 38400
+mqtt_host: core-mosquitto
+mqtt_port: 1883
+mqtt_base_topic: ComfoBox
+bacnet_master_id: 1
+bacnet_client_id: 3
+```
 
-When the bridge connects successfully, the ComfoBox display will show an **hourglass symbol** — confirming an active BACnet client is present on the bus.
+---
 
 ## MQTT Topics
 
-After startup, all ComfoBox values are published under the configured base topic, for example:
+Alle Topics beginnen mit dem konfigurierten `mqtt_base_topic` (Standard: `ComfoBox`).
 
-```
-ComfoBox/Climate/ActualTemperature_WaterHeater
-ComfoBox/Climate/SetPoint_RoomTemperature
-ComfoBox/Ventilation/FanSpeed
-ComfoBox/Special/NumberOfWritesPer24h
-```
+Lesen: `ComfoBox/<Kategorie>/<Name>`
+Schreiben: `ComfoBox/<Kategorie>/<Name>/Set`
 
-Writable values accept commands via the `/Set` suffix:
+Beispiele:
+- `ComfoBox/Climate/OutdoorTemperature` — Aussentemperatur
+- `ComfoBox/Ventilation/VentilationMode` — Lüftungsstufe
+- `ComfoBox/Ventilation/VentilationMode/Set` — Lüftungsstufe setzen
+- `ComboBox/Special/NumberOfWritesPer24h` — Anzahl Schreibvorgänge heute
 
-```
-ComfoBox/Climate/SetPoint_RoomTemperature/Set  →  21.5
-```
+Eine vollständige Topic-Liste findet sich in der [RF77 Dokumentation](https://github.com/RF77/comfobox-mqtt).
 
-> ⚠️ RF77 writes values to the EEPROM of the ComfoBox. The EEPROM has a limited write cycle life (~1,000,000 writes). Avoid automations that write values at high frequency.
+> **Achtung:** Die ComfoBox speichert Schreibwerte im EEPROM (~1'000'000 Schreibzyklen). Schreibwerte sparsam verwenden.
 
-A full topic list is available in the [RF77 documentation](https://github.com/RF77/comfobox-mqtt/blob/master/docs/topics.md).
+---
 
-## Troubleshooting
+## Technische Details / Bekannte Probleme
 
-Check the add-on log under **Settings → Add-ons → ComfoBox MQTT Bridge → Log**.
+### aarch64 (HA Green) — tcsetattr ENOTTY
+Mono's `SerialPort` ruft `tcsetattr()` auf dem virtuellen seriellen Port auf. Auf ARM/aarch64 gibt der Linux-Kernel `ENOTTY` zurück wenn der Port ein PTY-Slave ist. Das Add-on löst dies mit einem `LD_PRELOAD`-Wrapper (`tcsetattr_fix.so`) der `ENOTTY` abfängt und Erfolg zurückgibt.
 
-| Log message | Cause | Fix |
-|---|---|---|
-| `socat konnte nicht gestartet werden` | Cannot reach Waveshare adapter | Check IP, port, and network connectivity |
-| `Exception connecting to the broker` | Mosquitto requires authentication (RF77 connects anonymously) | Enable `allow_anonymous true` in Mosquitto config (see above) |
-| `Didn't get any messages from the Bacnet Master` | BACnet communication failure | Check baudrate and BACnet IDs match the ComfoBox OEM settings |
-| `mono abgestürzt` | Runtime error | Check full log for the exception detail above this message |
+### Baudrate
+RF77 berichtet dass auf dem Raspberry Pi nur **38400 Baud** funktioniert hat — die ComfoBox muss im OEM-Menü entsprechend konfiguriert werden (Werkseinstellung 76800).
 
-## Credits & Licensing
+### RS485 Polarität
+Falls keine BACnet-Kommunikation zustande kommt, A/B Kabel am Waveshare tauschen.
 
-This add-on bundles a pre-compiled binary from **[RF77/comfobox-mqtt](https://github.com/RF77/comfobox-mqtt)** — the actual BACnet/MSTP to MQTT bridge written in C#/.NET by RF77. Without this work, this add-on would not exist.
+---
 
-| Component | Author | License |
-|---|---|---|
-| `ComfoBox2Mqtt_0.4.0.zip` (bundled binary) | [RF77](https://github.com/RF77) | [Eclipse Public License v1.0](https://www.eclipse.org/legal/epl-v10.html) |
-| Add-on wrapper (run.sh, Dockerfile, config.yaml, …) | ptpat | MIT |
+## Entwicklungsgeschichte — Was nicht funktioniert hat
 
-See [NOTICE](./NOTICE) and [LICENSE-RF77](./LICENSE-RF77) for full license texts.
+Für alle die dasselbe Problem debuggen, hier die Irrwege:
+
+### Alpine Linux (ghcr.io/hassio-addons/base)
+Die Standard-HA-Addon-Basis verwendet Alpine mit **musl libc**. Mono's `SerialPort.isatty()` gibt auf musl `false` zurück für PTY-Slaves → `Not a tty` Fehler. Lösung: Wechsel zu **Debian bookworm-slim** (glibc).
+
+### /dev/ttyS0 via devices:
+`/dev/ttyS0` auf HA Green ist ein dummy UART ohne echte Hardware. `socat` kann darauf nicht schreiben → `I/O error`. Kein brauchbarer serieller Port.
+
+### socat mit ispeed/ospeed
+`socat PTY,ispeed=76800` — socat kennt 76800 nicht als Standard-Baudrate → `cfsetispeed: Invalid argument`. Nicht-Standard-Baudraten werden von socat nicht unterstützt.
+
+### socat rawer statt raw
+`rawer` setzt intern Baudrate-Optionen auf dem PTY → `cfsetispeed: Invalid argument`. Lösung: `raw` verwenden.
+
+### stty vor Mono-Start
+`stty -F /dev/pts/1 38400` auf einem PTY-Slave schlägt lautlos fehl (`|| true`). Mono ruft trotzdem `tcsetattr()` auf → `ENOTTY`. stty hilft nicht.
+
+### socat PTY↔PTY Topologie
+Zwei socat-Prozesse: PTY-A↔PTY-B und PTY-B↔TCP. Mono bekommt PTY-A. Trotzdem `ENOTTY` — PTY-Slaves auf ARM/aarch64 Linux unterstützen `tcsetattr()` grundsätzlich nicht vollständig, unabhängig von der Topologie.
+
+### Baudrate 76800
+RF77 README: *"On my Raspberry only a baudrate of 38400 was working."* Die ComfoBox muss im OEM-Menü auf 38400 umgestellt werden.
+
+### Mono aus externem Repository (mono-project.com)
+Im HA-Build-Container kein Internetzugang für `gpg keyserver` oder `curl` zu externen Repos → Build schlägt fehl mit Exit Code 100. Lösung: `mono-complete` direkt aus Debian Bookworm Standard-Repository.
+
+---
+
+## Lizenz
+
+Dieses Add-on basiert auf [RF77/comfobox-mqtt](https://github.com/RF77/comfobox-mqtt) — siehe `License rf77` für die ursprüngliche Lizenz.
