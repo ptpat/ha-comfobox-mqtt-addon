@@ -20,14 +20,12 @@ get_opt() {
 
 WAVESHARE_HOST="$(get_opt waveshare_host "")"
 WAVESHARE_PORT="$(get_opt waveshare_port "0")"
-BAUDRATE="$(get_opt baudrate "76800")"
+BAUDRATE="$(get_opt baudrate "38400")"
 MQTT_HOST="$(get_opt mqtt_host "core-mosquitto")"
 MQTT_PORT="$(get_opt mqtt_port "1883")"
 MQTT_BASE_TOPIC="$(get_opt mqtt_base_topic "ComfoBox")"
 BACNET_MASTER_ID="$(get_opt bacnet_master_id "1")"
 BACNET_CLIENT_ID="$(get_opt bacnet_client_id "3")"
-
-PTY_LINK="/tmp/comfobox_pty"
 
 echo "[INFO] Waveshare:    ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
 echo "[INFO] Baudrate:     ${BAUDRATE}"
@@ -55,7 +53,6 @@ unzip -o "$ZIP" -d /app/rf77 >/dev/null
 EXE_PATH="$(find /app/rf77 -type f -name "ComfoBoxMqttConsole.exe" | head -n1 || true)"
 if [ -z "$EXE_PATH" ]; then
     echo "[ERROR] ComfoBoxMqttConsole.exe nicht gefunden nach dem Entpacken"
-    find /app/rf77 -maxdepth 6 -print || true
     exit 1
 fi
 
@@ -63,62 +60,82 @@ APPDIR="$(dirname "$EXE_PATH")"
 echo "[INFO] EXE gefunden: $EXE_PATH"
 
 # ── Cleanup Handler ──────────────────────────────────────────────────────────────
-SOCAT_PID=""
+SOCAT_TCP_PID=""
+SOCAT_PTY_PID=""
 MONO_PID=""
 
 cleanup() {
     echo "[INFO] Shutdown: stoppe Prozesse..."
-    [ -n "$MONO_PID" ]  && kill "$MONO_PID"  2>/dev/null || true
-    [ -n "$SOCAT_PID" ] && kill "$SOCAT_PID" 2>/dev/null || true
-    rm -f "$PTY_LINK" 2>/dev/null || true
+    [ -n "$MONO_PID" ]      && kill "$MONO_PID"      2>/dev/null || true
+    [ -n "$SOCAT_PTY_PID" ] && kill "$SOCAT_PTY_PID" 2>/dev/null || true
+    [ -n "$SOCAT_TCP_PID" ] && kill "$SOCAT_TCP_PID" 2>/dev/null || true
+    rm -f /tmp/comfobox_pipe_in /tmp/comfobox_pipe_out /tmp/comfobox_pty 2>/dev/null || true
     exit 0
 }
 trap cleanup SIGTERM SIGINT
 
-# ── Schritt 1: socat PTY-Bridge starten ─────────────────────────────────────────
-# socat erstellt PTY-Paar und legt Symlink an.
-# rawer    → minimale TTY-Verarbeitung, keine Sonderzeichen-Interpretation
-# echo=0   → kein lokales Echo
-rm -f "$PTY_LINK" 2>/dev/null || true
+# ── Schritt 1: Zwei PTYs via socat verbinden ─────────────────────────────────────
+# Strategie: socat verbindet zwei PTY-Paare.
+# PTY-A (Slave A) → socat ↔ socat → PTY-B (Slave B)
+# Mono bekommt PTY-A: isatty() = true, tcsetattr() = ok (PTY unterstützt das)
+# socat leitet Daten weiter zu TCP (Waveshare)
+#
+# Tatsächlich: Ein PTY unterstützt tcsetattr NICHT vollständig → ENOTTY
+# Die wirkliche Lösung: socat mit PIPE zwischen PTY und TCP
+#
+# Korrekte Lösung: Named Pipe (FIFO) — Mono bekommt einen regulären PTY,
+# aber wir erstellen den PTY direkt via 'socat PTY PTY' damit beide Seiten
+# TTY-Semantik haben.
 
-echo "[INFO] Starte socat PTY-Bridge: ${WAVESHARE_HOST}:${WAVESHARE_PORT} → ${PTY_LINK}"
+PTY_MONO="/tmp/comfobox_mono_pty"   # Mono öffnet diesen
+PTY_TCP="/tmp/comfobox_tcp_pty"     # socat-TCP-Seite
+
+rm -f "$PTY_MONO" "$PTY_TCP" 2>/dev/null || true
+
+echo "[INFO] Starte socat PTY↔PTY Bridge..."
+# socat verbindet zwei PTY-Slaves direkt miteinander
+# PTY_MONO → Mono liest/schreibt hier
+# PTY_TCP  → wird von zweitem socat zu TCP weitergeleitet
 socat \
-    "PTY,link=${PTY_LINK},raw,echo=0" \
-    "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
+    "PTY,link=${PTY_MONO},raw,echo=0,mode=666" \
+    "PTY,link=${PTY_TCP},raw,echo=0,mode=666" \
     &
-SOCAT_PID=$!
+SOCAT_PTY_PID=$!
 
-# Warten bis socat den Symlink angelegt hat (max. 10s)
-echo "[INFO] Warte auf ${PTY_LINK}..."
+echo "[INFO] Warte auf PTY-Symlinks..."
 for i in $(seq 1 10); do
-    if [ -L "$PTY_LINK" ]; then
-        echo "[INFO] ${PTY_LINK} bereit nach ${i}s"
+    if [ -L "$PTY_MONO" ] && [ -L "$PTY_TCP" ]; then
+        echo "[INFO] PTY-Symlinks bereit nach ${i}s"
         break
     fi
-    if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
-        echo "[ERROR] socat sofort abgestürzt — Waveshare erreichbar? ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
+    if ! kill -0 "$SOCAT_PTY_PID" 2>/dev/null; then
+        echo "[ERROR] socat PTY↔PTY abgestürzt"
         exit 1
     fi
     sleep 1
 done
 
-if [ ! -L "$PTY_LINK" ]; then
-    echo "[ERROR] ${PTY_LINK} nicht bereit nach 10s"
-    kill "$SOCAT_PID" 2>/dev/null || true
+REAL_PTY_MONO="$(readlink -f "$PTY_MONO")"
+REAL_PTY_TCP="$(readlink -f "$PTY_TCP")"
+echo "[INFO] PTY Mono: ${PTY_MONO} → ${REAL_PTY_MONO}"
+echo "[INFO] PTY TCP:  ${PTY_TCP}  → ${REAL_PTY_TCP}"
+
+# ── Schritt 2: TCP-Seite mit Waveshare verbinden ─────────────────────────────────
+echo "[INFO] Starte socat TCP-Bridge: ${REAL_PTY_TCP} → ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
+socat \
+    "file:${REAL_PTY_TCP},raw,echo=0" \
+    "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
+    &
+SOCAT_TCP_PID=$!
+
+sleep 1
+if ! kill -0 "$SOCAT_TCP_PID" 2>/dev/null; then
+    echo "[ERROR] socat TCP abgestürzt — Waveshare erreichbar? ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
     exit 1
 fi
+echo "[INFO] TCP-Bridge läuft (PID=${SOCAT_TCP_PID})"
 
-# Echten /dev/pts/X Pfad auslesen
-REAL_PTY="$(readlink -f "$PTY_LINK")"
-echo "[INFO] PTY bereit: ${PTY_LINK} → ${REAL_PTY}"
-
-# PTY-Berechtigungen setzen
-chmod 666 "$REAL_PTY" 2>/dev/null || true
-
-# ── Schritt 2: RF77 Config mit echtem /dev/pts/X patchen ────────────────────────
-# Mono öffnet den Port direkt über den konfigurierten Pfad.
-# Wir übergeben den echten /dev/pts/X — das ist ein echter PTY-Device-Node,
-# isatty() besteht weil es ein character device mit TTY-Semantik ist.
+# ── Schritt 3: RF77 Config patchen ───────────────────────────────────────────────
 patch_xml_value() {
     local name="$1"
     local newval="$2"
@@ -131,26 +148,18 @@ patch_xml_value() {
     echo "[INFO] Patched: ${name} = ${newval}"
 }
 
+echo "[INFO] Patching: ComfoBoxMqttConsole.exe.config"
 for CFG in "$APPDIR"/*.config; do
     [ -f "$CFG" ] || continue
-    echo "[INFO] Patching: $(basename "$CFG")"
-    patch_xml_value "Port"              "$REAL_PTY"         "$CFG"
-    # Baudrate 0 → Mono überspringt tcsetattr() auf dem PTY (ENOTTY vermeiden)
-    # Die echte Baudrate wird vom Waveshare auf dem RS485-Bus gesetzt.
+    patch_xml_value "Port"              "$REAL_PTY_MONO"    "$CFG"
     patch_xml_value "Baudrate"          "$BAUDRATE"         "$CFG"
     patch_xml_value "BacnetMasterId"    "$BACNET_MASTER_ID" "$CFG"
     patch_xml_value "BacnetClientId"    "$BACNET_CLIENT_ID" "$CFG"
     patch_xml_value "MqttBrokerAddress" "$MQTT_HOST"        "$CFG"
+    patch_xml_value "MqttBrokerPort"    "$MQTT_PORT"        "$CFG"
     patch_xml_value "BaseTopic"         "$MQTT_BASE_TOPIC"  "$CFG"
     patch_xml_value "WriteTopicsToFile" "False"             "$CFG"
 done
-
-# ── Schritt 3: PTY-Slave auf Baudrate konfigurieren ─────────────────────────────
-# Mono ruft intern tcsetattr() auf dem PTY auf um die Baudrate zu setzen.
-# PTY-Slaves antworten auf ioctl TCSETS mit ENOTTY wenn keine Baudrate gesetzt ist.
-# Mit stty die Baudrate vorab setzen damit Mono keinen Fehler bekommt.
-echo "[INFO] Setze PTY Baudrate: ${BAUDRATE}"
-stty -F "${REAL_PTY}" "${BAUDRATE}" raw -echo 2>/dev/null || true
 
 # ── Schritt 4: Mono starten ──────────────────────────────────────────────────────
 echo "[INFO] Starte mono ${EXE_PATH}"
@@ -158,12 +167,16 @@ cd "$APPDIR"
 mono "${EXE_PATH}" &
 MONO_PID=$!
 
-echo "[INFO] Läuft — socat PID=${SOCAT_PID}, mono PID=${MONO_PID}"
+echo "[INFO] Läuft — socat-pty PID=${SOCAT_PTY_PID}, socat-tcp PID=${SOCAT_TCP_PID}, mono PID=${MONO_PID}"
 
 # ── Prozessüberwachung ───────────────────────────────────────────────────────────
 while true; do
-    if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
-        echo "[ERROR] socat abgestürzt — beende Addon"
+    if ! kill -0 "$SOCAT_PTY_PID" 2>/dev/null; then
+        echo "[ERROR] socat PTY abgestürzt — beende Addon"
+        cleanup
+    fi
+    if ! kill -0 "$SOCAT_TCP_PID" 2>/dev/null; then
+        echo "[ERROR] socat TCP abgestürzt — beende Addon"
         cleanup
     fi
     if ! kill -0 "$MONO_PID" 2>/dev/null; then
