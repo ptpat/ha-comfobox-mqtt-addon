@@ -7,7 +7,6 @@ RUN set -eux; \
         bash \
         ca-certificates \
         socat \
-        ser2net \
         unzip \
         tzdata \
         icu-libs \
