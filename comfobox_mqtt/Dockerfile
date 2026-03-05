@@ -13,9 +13,18 @@ RUN set -eux; \
         tzdata \
         jq \
         mono-complete \
+        gcc \
+        libc6-dev \
     ; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
+
+# LD_PRELOAD Wrapper: tcsetattr() auf PTY gibt ENOTTY auf ARM/aarch64.
+# Mono's SerialPort ruft tcsetattr() auf — dieser Wrapper fängt ENOTTY ab
+# und gibt Erfolg zurück damit Mono den Port öffnen kann.
+COPY tcsetattr_fix.c /tmp/tcsetattr_fix.c
+RUN gcc -shared -fPIC -o /usr/local/lib/tcsetattr_fix.so /tmp/tcsetattr_fix.c -ldl \
+    && rm /tmp/tcsetattr_fix.c
 
 WORKDIR /app
 
