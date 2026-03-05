@@ -1,5 +1,5 @@
 name: "ComfoBox MQTT Bridge"
-version: "1.2.9"
+version: "1.3.0"
 slug: "comfobox_mqtt"
 description: "Zehnder ComfoBox Series 5 (ELESTA) via Waveshare RS485/TCP → RF77 ComfoBox2Mqtt → MQTT"
 url: "https://github.com/ptpat/ha-comfobox-mqtt-addon"
@@ -14,7 +14,6 @@ boot: auto
 init: false
 
 # Netzwerk: benötigt Zugang zum Waveshare (TCP) und MQTT Broker
-# host_network nicht nötig — normales Container-Networking reicht
 host_network: false
 
 options:
@@ -22,19 +21,19 @@ options:
   waveshare_host: ""
   waveshare_port: 8899
 
-  # Serielle Verbindung
+  # Serielle Verbindung (Standard für ComfoBox Series 5)
   baudrate: 76800
 
   # MQTT Broker
+  # HINWEIS: RF77 ComfoBoxMqttConsole unterstuetzt keine MQTT-Authentifizierung.
+  # Mosquitto muss anonyme Verbindungen erlauben (s. README).
   mqtt_host: "core-mosquitto"
   mqtt_port: 1883
-  mqtt_user: ""
-  mqtt_pass: ""
   mqtt_base_topic: "ComfoBox"
 
   # BACnet MSTP Parameter
-  # master_id: ID der ComfoBox (meist 1)
-  # client_id: ID dieses Clients (muss verschieden von master_id sein)
+  # bacnet_master_id: BACnet-Adresse der ComfoBox (meist 1)
+  # bacnet_client_id: BACnet-Adresse dieses Clients (verschieden von master_id)
   bacnet_master_id: 1
   bacnet_client_id: 3
 
@@ -44,8 +43,6 @@ schema:
   baudrate: int(1200,115200)
   mqtt_host: str
   mqtt_port: int(1,65535)
-  mqtt_user: str
-  mqtt_pass: password
   mqtt_base_topic: str
   bacnet_master_id: int(0,4194303)
   bacnet_client_id: int(0,127)
