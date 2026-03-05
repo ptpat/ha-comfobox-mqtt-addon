@@ -3,7 +3,7 @@ set -euo pipefail
 
 echo "[INFO] ComfoBox MQTT Bridge starting..."
 
-# ── Konfiguration aus HA options.json lesen ──────────────────────────────────
+# ── Konfiguration aus HA options.json lesen ────────────────────────────────────
 OPTIONS_JSON="/data/options.json"
 
 get_opt() {
@@ -27,8 +27,9 @@ MQTT_BASE_TOPIC="$(get_opt mqtt_base_topic "ComfoBox")"
 BACNET_MASTER_ID="$(get_opt bacnet_master_id "1")"
 BACNET_CLIENT_ID="$(get_opt bacnet_client_id "3")"
 
-# /dev/ttyS0 ist ein echter serieller Port — besteht isatty() in Mono/Alpine
-# Im Container existieren /dev/ttyS0–S7 als echte Geräte
+# /dev/ttyS0: echter serieller Port im Container (via devices: in config.yaml freigegeben)
+# socat bridgt bidirektional: Mono liest/schreibt /dev/ttyS0,
+# socat leitet alles an den Waveshare TCP-Server weiter.
 SERIAL_DEV="/dev/ttyS0"
 
 echo "[INFO] Waveshare:    ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
@@ -38,13 +39,18 @@ echo "[INFO] MQTT topic:   ${MQTT_BASE_TOPIC}"
 echo "[INFO] BACnet:       master=${BACNET_MASTER_ID} client=${BACNET_CLIENT_ID}"
 echo "[INFO] Serial dev:   ${SERIAL_DEV}"
 
-# ── Validierung ───────────────────────────────────────────────────────────────
+# ── Validierung ──────────────────────────────────────────────────────────────────
 if [ -z "$WAVESHARE_HOST" ] || [ "$WAVESHARE_PORT" = "0" ]; then
     echo "[ERROR] waveshare_host und waveshare_port müssen konfiguriert sein!"
     exit 1
 fi
 
-# ── ZIP entpacken ─────────────────────────────────────────────────────────────
+if [ ! -e "$SERIAL_DEV" ]; then
+    echo "[ERROR] ${SERIAL_DEV} nicht vorhanden — devices-Eintrag in config.yaml prüfen!"
+    exit 1
+fi
+
+# ── ZIP entpacken ────────────────────────────────────────────────────────────────
 ZIP="/app/ComfoBox2Mqtt_0.4.0.zip"
 if [ ! -f "$ZIP" ]; then
     echo "[ERROR] ZIP nicht gefunden: $ZIP"
@@ -65,7 +71,7 @@ fi
 APPDIR="$(dirname "$EXE_PATH")"
 echo "[INFO] EXE gefunden: $EXE_PATH"
 
-# ── RF77 Config-Dateien patchen ───────────────────────────────────────────────
+# ── RF77 Config-Dateien patchen ──────────────────────────────────────────────────
 patch_xml_value() {
     local name="$1"
     local newval="$2"
@@ -81,16 +87,16 @@ patch_xml_value() {
 for CFG in "$APPDIR"/*.config; do
     [ -f "$CFG" ] || continue
     echo "[INFO] Patching: $(basename "$CFG")"
-    patch_xml_value "Port"               "$SERIAL_DEV"       "$CFG"
-    patch_xml_value "Baudrate"           "$BAUDRATE"         "$CFG"
+    patch_xml_value "Port"               "$SERIAL_DEV"      "$CFG"
+    patch_xml_value "Baudrate"           "$BAUDRATE"        "$CFG"
     patch_xml_value "BacnetMasterId"     "$BACNET_MASTER_ID" "$CFG"
     patch_xml_value "BacnetClientId"     "$BACNET_CLIENT_ID" "$CFG"
-    patch_xml_value "MqttBrokerAddress"  "$MQTT_HOST"        "$CFG"
-    patch_xml_value "BaseTopic"          "$MQTT_BASE_TOPIC"  "$CFG"
-    patch_xml_value "WriteTopicsToFile"  "False"             "$CFG"
+    patch_xml_value "MqttBrokerAddress"  "$MQTT_HOST"       "$CFG"
+    patch_xml_value "BaseTopic"          "$MQTT_BASE_TOPIC" "$CFG"
+    patch_xml_value "WriteTopicsToFile"  "False"            "$CFG"
 done
 
-# ── Cleanup Handler ───────────────────────────────────────────────────────────
+# ── Cleanup Handler ──────────────────────────────────────────────────────────────
 SOCAT_PID=""
 MONO_PID=""
 
@@ -102,34 +108,30 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT
 
-# ── socat: TCP-Waveshare ↔ /dev/ttyS0 ────────────────────────────────────────
-# /dev/ttyS0 ist ein echter serieller Port (kein PTY) → isatty() besteht.
-# socat bridgt bidirektional: Mono schreibt/liest /dev/ttyS0,
-# socat leitet alles an den Waveshare TCP-Server weiter.
-echo "[INFO] Setze /dev/ttyS0 Berechtigungen..."
-chmod 666 "$SERIAL_DEV" 2>/dev/null || true
+# ── socat: TCP-Waveshare ↔ /dev/ttyS0 ───────────────────────────────────────────
+# Alpine socat kennt keine b76800-Option → Baudrate vorab mit stty setzen,
+# socat dann ohne Baudrate-Parameter aufrufen.
+echo "[INFO] Setze ${SERIAL_DEV} Baudrate auf ${BAUDRATE}..."
+stty -F "${SERIAL_DEV}" "${BAUDRATE}" raw cs8 -cstopb -parenb 2>/dev/null || true
 
 echo "[INFO] Starte socat: ${WAVESHARE_HOST}:${WAVESHARE_PORT} ↔ ${SERIAL_DEV}"
-
-# Baudrate vorab mit stty setzen (socat Alpine kennt keine b76800 Option)
-stty -F "${SERIAL_DEV}" "${BAUDRATE}" raw 2>/dev/null || true
-
 socat \
     "${SERIAL_DEV},raw,echo=0" \
     "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
     &
 SOCAT_PID=$!
 
-echo "[INFO] socat gestartet (PID=${SOCAT_PID}), warte 2s..."
-sleep 2
+echo "[INFO] socat gestartet (PID=${SOCAT_PID}), warte 3s..."
+sleep 3
 
 if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
-    echo "[ERROR] socat konnte nicht gestartet werden"
+    echo "[ERROR] socat konnte nicht gestartet werden — Waveshare erreichbar? ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
     exit 1
 fi
+
 echo "[INFO] socat läuft — Bridge aktiv"
 
-# ── Mono: RF77 ComfoBoxMqttConsole starten ────────────────────────────────────
+# ── Mono: RF77 ComfoBoxMqttConsole starten ───────────────────────────────────────
 echo "[INFO] Starte mono ${EXE_PATH}"
 cd "$APPDIR"
 mono "${EXE_PATH}" &
@@ -137,7 +139,7 @@ MONO_PID=$!
 
 echo "[INFO] Läuft — socat PID=${SOCAT_PID}, mono PID=${MONO_PID}"
 
-# Prozesse überwachen
+# ── Prozessüberwachung ───────────────────────────────────────────────────────────
 while true; do
     if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
         echo "[ERROR] socat abgestürzt — beende Addon"
