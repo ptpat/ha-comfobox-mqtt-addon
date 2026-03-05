@@ -83,7 +83,7 @@ rm -f "$PTY_LINK" 2>/dev/null || true
 
 echo "[INFO] Starte socat PTY-Bridge: ${WAVESHARE_HOST}:${WAVESHARE_PORT} → ${PTY_LINK}"
 socat \
-    "PTY,link=${PTY_LINK},rawer,echo=0" \
+    "PTY,link=${PTY_LINK},rawer,echo=0,ispeed=${BAUDRATE},ospeed=${BAUDRATE}" \
     "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
     &
 SOCAT_PID=$!
@@ -143,7 +143,14 @@ for CFG in "$APPDIR"/*.config; do
     patch_xml_value "WriteTopicsToFile" "False"             "$CFG"
 done
 
-# ── Schritt 3: Mono starten ──────────────────────────────────────────────────────
+# ── Schritt 3: PTY-Slave auf Baudrate konfigurieren ─────────────────────────────
+# Mono ruft intern tcsetattr() auf dem PTY auf um die Baudrate zu setzen.
+# PTY-Slaves antworten auf ioctl TCSETS mit ENOTTY wenn keine Baudrate gesetzt ist.
+# Mit stty die Baudrate vorab setzen damit Mono keinen Fehler bekommt.
+echo "[INFO] Setze PTY Baudrate: ${BAUDRATE}"
+stty -F "${REAL_PTY}" "${BAUDRATE}" raw -echo 2>/dev/null || true
+
+# ── Schritt 4: Mono starten ──────────────────────────────────────────────────────
 echo "[INFO] Starte mono ${EXE_PATH}"
 cd "$APPDIR"
 mono "${EXE_PATH}" &
