@@ -1,1 +1,15 @@
+ComfoBox MQTT Bridge — Home Assistant Add-on
+Copyright (c) 2026 ptpat
 
+This add-on includes a pre-compiled binary (ComfoBox2Mqtt_0.4.0.zip) from:
+
+  RF77/comfobox-mqtt
+  https://github.com/RF77/comfobox-mqtt
+  Copyright (c) RF77
+  Licensed under the Eclipse Public License v1.0 (EPL-1.0)
+  https://www.eclipse.org/legal/epl-v10.html
+
+The EPL-1.0 license text is reproduced in LICENSE-RF77.
+
+The add-on wrapper scripts (run.sh, Dockerfile, config.yaml and related files)
+are original work by ptpat and are licensed under the MIT License (see LICENSE).
