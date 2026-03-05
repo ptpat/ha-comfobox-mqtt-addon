@@ -111,37 +111,46 @@ cleanup() {
     echo "[INFO] Shutdown: stoppe Prozesse..."
     [ -n "$MONO_PID" ]  && kill "$MONO_PID"  2>/dev/null || true
     [ -n "$SOCAT_PID" ] && kill "$SOCAT_PID" 2>/dev/null || true
-    # PTY aufräumen
-    rm -f "$SERIAL_PTY"
     exit 0
 }
 trap cleanup SIGTERM SIGINT
 
 # ── Socat: virtueller serieller Port ─────────────────────────────────────────
-# Erstellt /tmp/comfobox als PTY-Symlink der TCP zum Waveshare bridgt
-echo "[INFO] Starte socat PTY-Bridge: ${WAVESHARE_HOST}:${WAVESHARE_PORT} → ${SERIAL_PTY}"
+# socat gibt den echten PTY-Pfad (z.B. /dev/pts/2) auf stderr aus.
+# Wir lesen diesen Pfad und patchen die Config damit — kein Symlink nötig.
+echo "[INFO] Starte socat PTY-Bridge: ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
 
-rm -f "$SERIAL_PTY"
+SOCAT_LOG="/tmp/socat_pty.log"
+rm -f "$SOCAT_LOG"
 
-socat \
-    "pty,link=${SERIAL_PTY},raw,echo=0" \
+socat -d \
+    "pty,raw,echo=0" \
     "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
-    &
+    2>"$SOCAT_LOG" &
 SOCAT_PID=$!
 
-# Warten bis der PTY-Symlink existiert (max 15 Sekunden)
-echo "[INFO] Warte auf PTY ${SERIAL_PTY}..."
+# Warten bis socat den PTY-Pfad in den Log schreibt (max 15 Sekunden)
+echo "[INFO] Warte auf PTY..."
+REAL_PTY=""
 for i in $(seq 1 15); do
-    if [ -e "$SERIAL_PTY" ]; then
-        echo "[INFO] PTY bereit nach ${i}s"
+    REAL_PTY="$(grep -oE '/dev/pts/[0-9]+' "$SOCAT_LOG" 2>/dev/null | head -n1 || true)"
+    if [ -n "$REAL_PTY" ]; then
+        echo "[INFO] PTY bereit nach ${i}s: ${REAL_PTY}"
         break
     fi
     sleep 1
     if [ "$i" -eq 15 ]; then
-        echo "[ERROR] PTY ${SERIAL_PTY} nicht bereit nach 15s — Verbindung zum Waveshare fehlgeschlagen?"
+        echo "[ERROR] PTY nicht bereit nach 15s — Verbindung zum Waveshare fehlgeschlagen?"
+        cat "$SOCAT_LOG" || true
         kill "$SOCAT_PID" 2>/dev/null || true
         exit 1
     fi
+done
+
+# Config nochmals patchen mit dem echten PTY-Pfad
+for CFG in "$APPDIR"/*.config; do
+    [ -f "$CFG" ] || continue
+    patch_xml_value "Port" "$REAL_PTY" "$CFG"
 done
 
 # ── Mono: RF77 ComfoBoxMqttConsole starten ────────────────────────────────────
@@ -159,11 +168,11 @@ wait_and_monitor() {
         if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
             echo "[ERROR] socat ist abgestürzt — starte neu in 5s..."
             sleep 5
-            rm -f "$SERIAL_PTY"
-            socat \
-                "pty,link=${SERIAL_PTY},raw,echo=0" \
+            rm -f "$SOCAT_LOG"
+            socat -d \
+                "pty,raw,echo=0" \
                 "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
-                &
+                2>"$SOCAT_LOG" &
             SOCAT_PID=$!
             echo "[INFO] socat neu gestartet PID=${SOCAT_PID}"
         fi
