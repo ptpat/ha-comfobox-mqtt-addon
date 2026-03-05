@@ -124,7 +124,7 @@ echo "[INFO] Starte socat PTY-Bridge: ${WAVESHARE_HOST}:${WAVESHARE_PORT} → ${
 rm -f "$SERIAL_PTY"
 
 socat \
-    "pty,link=${SERIAL_PTY},raw,echo=0,b${BAUDRATE}" \
+    "pty,link=${SERIAL_PTY},raw,echo=0" \
     "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
     &
 SOCAT_PID=$!
@@ -161,7 +161,7 @@ wait_and_monitor() {
             sleep 5
             rm -f "$SERIAL_PTY"
             socat \
-                "pty,link=${SERIAL_PTY},raw,echo=0,b${BAUDRATE}" \
+                "pty,link=${SERIAL_PTY},raw,echo=0" \
                 "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
                 &
             SOCAT_PID=$!
