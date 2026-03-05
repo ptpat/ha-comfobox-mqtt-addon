@@ -13,7 +13,6 @@ RUN set -eux; \
         libstdc++ \
         libgcc \
         jq \
-        python3 \
     ; \
     # Mono aus Alpine edge (einzige verfügbare Quelle für Alpine)
     apk add --no-cache \
