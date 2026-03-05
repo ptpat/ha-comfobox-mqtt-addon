@@ -1,3 +1,6 @@
+# Kein build_from mehr — Dockerfile verwendet debian:bookworm-slim direkt.
+# Alpine/musl (hassio-addons/base) wird nicht mehr verwendet wegen
+# Mono isatty()-Inkompatibilität mit musl libc.
 build_from:
-  amd64: ghcr.io/hassio-addons/base:19.0.0
-  aarch64: ghcr.io/hassio-addons/base:19.0.0
+  aarch64: debian:bookworm-slim
+  amd64: debian:bookworm-slim
