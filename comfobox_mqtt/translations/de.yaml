@@ -1,34 +1,31 @@
 configuration:
-  use_socat:
-    name: Socat TCP->PTY Bridge verwenden
-    description: Aktivieren bei Nutzung eines Waveshare TCP-zu-Seriell Gateways.
   waveshare_host:
     name: Waveshare Host / IP
+    description: IP-Adresse oder Hostname des Waveshare RS485/Ethernet-Adapters.
   waveshare_port:
     name: Waveshare TCP Port
-  serial_port:
-    name: Serieller Port (PTY Pfad)
-    description: Pfad, den socat im Add-on erzeugt (z.B. /tmp/comfobox).
+    description: TCP-Port des Waveshare-Adapters (Standard bei Waveshare ist 8899).
   baudrate:
     name: Baudrate
-    description: RS485/MSTP Baudrate (typisch 38400).
-
+    description: RS485/MSTP Baudrate. Muss mit der ComfoBox-Konfiguration übereinstimmen (typisch 38400 oder 76800).
   mqtt_host:
-    name: MQTT Host
-    description: Meist core-mosquitto (Supervisor Add-on).
+    name: MQTT Broker Host
+    description: Hostname oder IP des MQTT-Brokers. Bei Mosquitto Add-on ist dies "core-mosquitto".
   mqtt_port:
-    name: MQTT Port
+    name: MQTT Broker Port
+    description: TCP-Port des MQTT-Brokers (Standard 1883).
   mqtt_user:
     name: MQTT Benutzername
+    description: Optional. Leer lassen wenn keine Authentifizierung.
   mqtt_pass:
     name: MQTT Passwort
+    description: Optional. Leer lassen wenn keine Authentifizierung.
   mqtt_base_topic:
-    name: MQTT Basistopic
-    description: Root-Topic von RF77 (Default ComfoBox).
-
+    name: MQTT Base Topic
+    description: Wurzel-Topic für alle ComfoBox-Werte (Standard "ComfoBox").
   bacnet_master_id:
     name: BACnet Master Device ID
-    description: DeviceId der ComfoBox (z.B. 11).
+    description: BACnet-Geräte-ID der ComfoBox (Standard 1). Im OEM-Menü der ComfoBox ersichtlich.
   bacnet_client_id:
     name: BACnet Client ID
-    description: ClientId der Bridge auf dem MSTP-Bus (Default 3).
+    description: BACnet-ID dieses Bridges auf dem MSTP-Bus (Standard 3). Muss verschieden von der Master ID sein.
