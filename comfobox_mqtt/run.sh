@@ -116,7 +116,7 @@ stty -F "${SERIAL_DEV}" "${BAUDRATE}" raw cs8 -cstopb -parenb 2>/dev/null || tru
 
 echo "[INFO] Starte socat: ${WAVESHARE_HOST}:${WAVESHARE_PORT} ↔ ${SERIAL_DEV}"
 socat \
-    "${SERIAL_DEV},raw,echo=0" \
+    "${SERIAL_DEV}" \
     "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
     &
 SOCAT_PID=$!
