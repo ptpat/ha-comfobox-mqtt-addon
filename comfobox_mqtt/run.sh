@@ -64,11 +64,11 @@ APPDIR="$(dirname "$EXE_PATH")"
 echo "[INFO] EXE gefunden: $EXE_PATH"
 
 # ── RF77 Config-Dateien patchen ───────────────────────────────────────────────
-# RF77 hat zwei getrennte .config Dateien:
-#   ComfoBoxMqttConsole.exe.config  → merged config aus ComfoBoxLib + ComfoBoxMqtt
-# Setting-Namen gemäss RF77 Quellcode:
-#   ComfoBoxLib.Properties.Settings:  Port, Baudrate, BacnetClientId, BacnetMasterId
-#   ComfoBoxMqtt.Properties.Settings: BaseTopic, MqttBrokerAddresses, WriteTopicsToFile
+# Die ZIP enthält eine einzelne zusammengeführte .config Datei.
+# Setting-Namen gemäss tatsächlicher ZIP-Config:
+#   ComfoBoxLib.Properties.Settings:  Port, Baudrate, BacnetClientId, BacnetMasterId,
+#                                     MqttBrokerAddress (Singular, einfacher String!)
+#   ComfoBoxMqtt.Properties.Settings: BaseTopic, WriteTopicsToFile
 
 patch_xml_value() {
     # Patcht <setting name="KEY"> ... <value>VAL</value> ... </setting>
@@ -84,61 +84,23 @@ patch_xml_value() {
     echo "[INFO] Patched: ${name} = ${newval}"
 }
 
-patch_mqtt_brokers() {
-    # MqttBrokerAddresses ist ein XML-Array — erfordert spezielles Patching
-    local host="$1"
-    local file="$2"
-    if ! grep -q "MqttBrokerAddresses" "$file" 2>/dev/null; then
-        echo "[WARN] MqttBrokerAddresses nicht gefunden in $(basename "$file")"
-        return 0
-    fi
-    # Ersetze den gesamten ArrayOfString Block
-    local new_block="<value>\n          <ArrayOfString xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n            <string>${host}<\/string>\n          <\/ArrayOfString>\n        <\/value>"
-    sed -i -E "/MqttBrokerAddresses/,/<\/setting>/ {
-        /<value>/,/<\/value>/ {
-            /<value>/ { s|.*|        ${new_block}|; }
-            /<\/value>/ { /^[[:space:]]*<\/value>/ d; }
-        }
-    }" "$file" || true
-    # Einfachere Alternative: Python für XML-Manipulation
-    python3 - "$file" "$host" <<'PYEOF'
-import sys, re
-filepath, host = sys.argv[1], sys.argv[2]
-with open(filepath, 'r') as f:
-    content = f.read()
-# Ersetze ArrayOfString Block innerhalb von MqttBrokerAddresses setting
-new_array = f'''<value>
-          <ArrayOfString xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-            <string>{host}</string>
-          </ArrayOfString>
-        </value>'''
-content = re.sub(
-    r'(<setting name="MqttBrokerAddresses"[^>]*>)\s*<value>.*?</value>',
-    r'\1\n        ' + new_array,
-    content,
-    flags=re.DOTALL
-)
-with open(filepath, 'w') as f:
-    f.write(content)
-print(f"[INFO] Patched: MqttBrokerAddresses = {host}")
-PYEOF
-}
+
 
 # Alle .config Dateien im App-Verzeichnis patchen
 for CFG in "$APPDIR"/*.config; do
     [ -f "$CFG" ] || continue
     echo "[INFO] Patching: $(basename "$CFG")"
 
-    # ComfoBoxLib Settings (Port, Baudrate, BACnet)
-    patch_xml_value "Port"           "$SERIAL_PTY"       "$CFG"
-    patch_xml_value "Baudrate"       "$BAUDRATE"         "$CFG"
-    patch_xml_value "BacnetMasterId" "$BACNET_MASTER_ID" "$CFG"
-    patch_xml_value "BacnetClientId" "$BACNET_CLIENT_ID" "$CFG"
+    # ComfoBoxLib Settings (Port, Baudrate, BACnet, MQTT-Broker)
+    patch_xml_value "Port"               "$SERIAL_PTY"       "$CFG"
+    patch_xml_value "Baudrate"           "$BAUDRATE"         "$CFG"
+    patch_xml_value "BacnetMasterId"     "$BACNET_MASTER_ID" "$CFG"
+    patch_xml_value "BacnetClientId"     "$BACNET_CLIENT_ID" "$CFG"
+    patch_xml_value "MqttBrokerAddress"  "$MQTT_HOST"        "$CFG"
 
-    # ComfoBoxMqtt Settings (MQTT)
-    patch_xml_value "BaseTopic"        "$MQTT_BASE_TOPIC" "$CFG"
-    patch_xml_value "WriteTopicsToFile" "False"           "$CFG"
-    patch_mqtt_brokers "$MQTT_HOST"    "$CFG"
+    # ComfoBoxMqtt Settings
+    patch_xml_value "BaseTopic"          "$MQTT_BASE_TOPIC"  "$CFG"
+    patch_xml_value "WriteTopicsToFile"  "False"             "$CFG"
 done
 
 # ── Cleanup Handler ───────────────────────────────────────────────────────────
