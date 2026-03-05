@@ -28,13 +28,17 @@ MQTT_PASS="$(get_opt mqtt_pass "")"
 MQTT_BASE_TOPIC="$(get_opt mqtt_base_topic "ComfoBox")"
 BACNET_MASTER_ID="$(get_opt bacnet_master_id "1")"
 BACNET_CLIENT_ID="$(get_opt bacnet_client_id "3")"
-SERIAL_PTY="/tmp/comfobox"
+
+# /dev/ttyS0 ist ein echter serieller Port — besteht isatty() in Mono/Alpine
+# Im Container existieren /dev/ttyS0–S7 als echte Geräte
+SERIAL_DEV="/dev/ttyS0"
 
 echo "[INFO] Waveshare:    ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
 echo "[INFO] Baudrate:     ${BAUDRATE}"
 echo "[INFO] MQTT:         ${MQTT_HOST}:${MQTT_PORT}"
 echo "[INFO] MQTT topic:   ${MQTT_BASE_TOPIC}"
 echo "[INFO] BACnet:       master=${BACNET_MASTER_ID} client=${BACNET_CLIENT_ID}"
+echo "[INFO] Serial dev:   ${SERIAL_DEV}"
 
 # ── Validierung ───────────────────────────────────────────────────────────────
 if [ -z "$WAVESHARE_HOST" ] || [ "$WAVESHARE_PORT" = "0" ]; then
@@ -64,15 +68,7 @@ APPDIR="$(dirname "$EXE_PATH")"
 echo "[INFO] EXE gefunden: $EXE_PATH"
 
 # ── RF77 Config-Dateien patchen ───────────────────────────────────────────────
-# Die ZIP enthält eine einzelne zusammengeführte .config Datei.
-# Setting-Namen gemäss tatsächlicher ZIP-Config:
-#   ComfoBoxLib.Properties.Settings:  Port, Baudrate, BacnetClientId, BacnetMasterId,
-#                                     MqttBrokerAddress (Singular, einfacher String!)
-#   ComfoBoxMqtt.Properties.Settings: BaseTopic, WriteTopicsToFile
-
 patch_xml_value() {
-    # Patcht <setting name="KEY"> ... <value>VAL</value> ... </setting>
-    # Funktioniert auch wenn <value> auf einer eigenen Zeile steht
     local name="$1"
     local newval="$2"
     local file="$3"
@@ -84,21 +80,14 @@ patch_xml_value() {
     echo "[INFO] Patched: ${name} = ${newval}"
 }
 
-
-
-# Alle .config Dateien im App-Verzeichnis patchen
 for CFG in "$APPDIR"/*.config; do
     [ -f "$CFG" ] || continue
     echo "[INFO] Patching: $(basename "$CFG")"
-
-    # ComfoBoxLib Settings (Port, Baudrate, BACnet, MQTT-Broker)
-    patch_xml_value "Port"               "$SERIAL_PTY"       "$CFG"
+    patch_xml_value "Port"               "$SERIAL_DEV"       "$CFG"
     patch_xml_value "Baudrate"           "$BAUDRATE"         "$CFG"
     patch_xml_value "BacnetMasterId"     "$BACNET_MASTER_ID" "$CFG"
     patch_xml_value "BacnetClientId"     "$BACNET_CLIENT_ID" "$CFG"
     patch_xml_value "MqttBrokerAddress"  "$MQTT_HOST"        "$CFG"
-
-    # ComfoBoxMqtt Settings
     patch_xml_value "BaseTopic"          "$MQTT_BASE_TOPIC"  "$CFG"
     patch_xml_value "WriteTopicsToFile"  "False"             "$CFG"
 done
@@ -111,55 +100,32 @@ cleanup() {
     echo "[INFO] Shutdown: stoppe Prozesse..."
     [ -n "$MONO_PID" ]  && kill "$MONO_PID"  2>/dev/null || true
     [ -n "$SOCAT_PID" ] && kill "$SOCAT_PID" 2>/dev/null || true
-    rm -f /tmp/comfobox
     exit 0
 }
 trap cleanup SIGTERM SIGINT
 
-# ── socat: virtueller serieller Port ─────────────────────────────────────────
-# Verwendet waitslave damit socat wartet bis Mono den Slave-PTY öffnet.
-# group-late=dialout und mode=660 geben Mono Zugriff auf den PTY.
-SERIAL_DEV="/tmp/comfobox"
+# ── socat: TCP-Waveshare ↔ /dev/ttyS0 ────────────────────────────────────────
+# /dev/ttyS0 ist ein echter serieller Port (kein PTY) → isatty() besteht.
+# socat bridgt bidirektional: Mono schreibt/liest /dev/ttyS0,
+# socat leitet alles an den Waveshare TCP-Server weiter.
+echo "[INFO] Setze /dev/ttyS0 Berechtigungen..."
+chmod 666 "$SERIAL_DEV" 2>/dev/null || true
 
-echo "[INFO] Starte socat PTY-Bridge: ${WAVESHARE_HOST}:${WAVESHARE_PORT} → ${SERIAL_DEV}"
-
-rm -f "$SERIAL_DEV"
-
+echo "[INFO] Starte socat: ${WAVESHARE_HOST}:${WAVESHARE_PORT} ↔ ${SERIAL_DEV}"
 socat \
-    "pty,link=${SERIAL_DEV},waitslave,group-late=root,mode=666" \
+    "${SERIAL_DEV},b${BAUDRATE},rawer,nonblock" \
     "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
     &
 SOCAT_PID=$!
 
-# Warten bis Symlink erscheint (max 15 Sekunden)
-echo "[INFO] Warte auf ${SERIAL_DEV}..."
-for i in $(seq 1 15); do
-    if [ -e "$SERIAL_DEV" ]; then
-        echo "[INFO] ${SERIAL_DEV} bereit nach ${i}s"
-        # Echten PTY-Pfad ermitteln und loggen
-        REAL_PTY="$(readlink -f "$SERIAL_DEV" 2>/dev/null || echo "$SERIAL_DEV")"
-        echo "[INFO] Echter PTY-Pfad: ${REAL_PTY}"
-        echo "[DEBUG] PTY permissions: $(ls -la "$REAL_PTY" 2>/dev/null || echo 'unbekannt')"
-        break
-    fi
-    sleep 1
-    if [ "$i" -eq 15 ]; then
-        echo "[ERROR] ${SERIAL_DEV} nicht bereit nach 15s"
-        kill "$SOCAT_PID" 2>/dev/null || true
-        exit 1
-    fi
-done
+echo "[INFO] socat gestartet (PID=${SOCAT_PID}), warte 2s..."
+sleep 2
 
-# PTY-Berechtigungen explizit setzen damit Mono zugreifen kann
-REAL_PTY="$(readlink -f "$SERIAL_DEV" 2>/dev/null || echo "$SERIAL_DEV")"
-chmod 666 "$REAL_PTY" 2>/dev/null || true
-
-# Config mit dem ECHTEN PTY-Pfad patchen (nicht Symlink!)
-# Mono's isatty() schlägt auf Symlinks fehl — braucht echtes /dev/pts/X
-for CFG in "$APPDIR"/*.config; do
-    [ -f "$CFG" ] || continue
-    patch_xml_value "Port" "$REAL_PTY" "$CFG"
-done
+if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
+    echo "[ERROR] socat konnte nicht gestartet werden"
+    exit 1
+fi
+echo "[INFO] socat läuft — Bridge aktiv"
 
 # ── Mono: RF77 ComfoBoxMqttConsole starten ────────────────────────────────────
 echo "[INFO] Starte mono ${EXE_PATH}"
