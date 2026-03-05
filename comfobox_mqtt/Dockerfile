@@ -3,32 +3,27 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8
 
+# Alle Pakete aus Debian Standard-Repository — kein externes Repo nötig.
+# mono-complete ist in Debian bookworm enthalten (Version 6.8).
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         bash \
         ca-certificates \
-        curl \
-        gnupg \
         socat \
         unzip \
         tzdata \
         jq \
-        apt-transport-https \
-    ; \
-    # Mono offizielles Repository via curl (stabiler als gpg keyserver)
-    curl -fsSL https://download.mono-project.com/repo/xamarin.gpg \
-        | gpg --dearmor \
-        > /usr/share/keyrings/mono-official.gpg; \
-    echo "deb [signed-by=/usr/share/keyrings/mono-official.gpg] https://download.mono-project.com/repo/debian stable-bookworm main" \
-        > /etc/apt/sources.list.d/mono-official-stable.list; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-        mono-complete \
+        mono-runtime \
+        libmono-system-runtime4.0-cil \
+        libmono-system-xml4.0-cil \
+        libmono-system-net-http4.0-cil \
+        libmono-system-servicemodel4.0a-cil \
+        libmono-corlib4.5-cil \
+        libmono-posix4.0-cil \
     ; \
     apt-get clean; \
-    rm -rf /var/lib/apt/lists/*; \
-    update-ca-certificates
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
