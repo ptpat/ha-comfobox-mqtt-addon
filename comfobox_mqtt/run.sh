@@ -120,21 +120,23 @@ trap cleanup SIGTERM SIGINT
 # Wir lesen diesen Pfad und patchen die Config damit — kein Symlink nötig.
 echo "[INFO] Starte socat PTY-Bridge: ${WAVESHARE_HOST}:${WAVESHARE_PORT}"
 
-SOCAT_LOG="/tmp/socat_pty.log"
-rm -f "$SOCAT_LOG"
+# PTY-Devices vor socat-Start merken
+PTS_BEFORE="$(ls /dev/pts/ 2>/dev/null | grep -E '^[0-9]+$' | sort -n || true)"
 
-socat -d \
+socat \
     "pty,raw,echo=0" \
     "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
-    2>"$SOCAT_LOG" &
+    &
 SOCAT_PID=$!
 
-# Warten bis socat den PTY-Pfad in den Log schreibt (max 15 Sekunden)
+# Warten bis ein neues PTY-Device erscheint (max 15 Sekunden)
 echo "[INFO] Warte auf PTY..."
 REAL_PTY=""
 for i in $(seq 1 15); do
-    REAL_PTY="$(grep -oE '/dev/pts/[0-9]+' "$SOCAT_LOG" 2>/dev/null | head -n1 || true)"
-    if [ -n "$REAL_PTY" ]; then
+    PTS_AFTER="$(ls /dev/pts/ 2>/dev/null | grep -E '^[0-9]+$' | sort -n || true)"
+    NEW_PTS="$(comm -13 <(echo "$PTS_BEFORE") <(echo "$PTS_AFTER") | head -n1 || true)"
+    if [ -n "$NEW_PTS" ]; then
+        REAL_PTY="/dev/pts/${NEW_PTS}"
         echo "[INFO] PTY bereit nach ${i}s: ${REAL_PTY}"
         break
     fi
@@ -142,10 +144,8 @@ for i in $(seq 1 15); do
     if [ "$i" -eq 15 ]; then
         echo "[ERROR] PTY nicht bereit nach 15s"
         echo "[DEBUG] socat PID=${SOCAT_PID} noch aktiv: $(kill -0 "$SOCAT_PID" 2>/dev/null && echo ja || echo nein)"
-        echo "[DEBUG] socat log:"
-        cat "$SOCAT_LOG" 2>/dev/null || echo "(leer)"
-        echo "[DEBUG] /dev/pts Inhalt:"
-        ls -la /dev/pts/ 2>/dev/null || echo "(nicht lesbar)"
+        echo "[DEBUG] /dev/pts vorher: $(echo "$PTS_BEFORE" | tr '\n' ' ')"
+        echo "[DEBUG] /dev/pts nachher: $(ls /dev/pts/ 2>/dev/null | tr '\n' ' ')"
         kill "$SOCAT_PID" 2>/dev/null || true
         exit 1
     fi
@@ -172,11 +172,11 @@ wait_and_monitor() {
         if ! kill -0 "$SOCAT_PID" 2>/dev/null; then
             echo "[ERROR] socat ist abgestürzt — starte neu in 5s..."
             sleep 5
-            rm -f "$SOCAT_LOG"
-            socat -d \
+            PTS_BEFORE="$(ls /dev/pts/ 2>/dev/null | grep -E '^[0-9]+$' | sort -n || true)"
+            socat \
                 "pty,raw,echo=0" \
                 "TCP:${WAVESHARE_HOST}:${WAVESHARE_PORT},keepalive,nodelay,retry=10,interval=3" \
-                2>"$SOCAT_LOG" &
+                &
             SOCAT_PID=$!
             echo "[INFO] socat neu gestartet PID=${SOCAT_PID}"
         fi
