@@ -1,10 +1,11 @@
-/* 
+/*
  * tcsetattr_fix.c — LD_PRELOAD wrapper
  * Fängt tcsetattr() ab und gibt Erfolg zurück wenn ENOTTY auftreten würde.
  * Mono's SerialPort ruft tcsetattr() auf PTY-Slaves auf — PTYs auf ARM/aarch64
  * geben ENOTTY zurück. Dieser Wrapper gibt stattdessen 0 (Erfolg) zurück.
  */
 #define _GNU_SOURCE
+#include <stddef.h>
 #include <termios.h>
 #include <errno.h>
 #include <dlfcn.h>
