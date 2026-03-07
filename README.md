@@ -1,13 +1,13 @@
 # ComfoBox MQTT Bridge — Home Assistant Add-on
 
-Connects a **Zehnder ComfoBox Series 5 (ELESTA)** to Home Assistant via MQTT, using a Waveshare RS485/Ethernet adapter. Based on the [RF77 ComfoBox2Mqtt](https://github.com/RF77/comfobox-mqtt) project (v0.4.0).
+Connects a **Zehnder ComfoBox Series 5/8/.. (ELESTA)** to Home Assistant via MQTT, using a Waveshare RS485/Ethernet adapter. Based on the [RF77 ComfoBox2Mqtt](https://github.com/RF77/comfobox-mqtt) project (v0.4.0).
 
 ---
 
 ## Architecture
 
 ```
-ComfoBox Series 5
+ComfoBox Series 5 / ( / ..
   │ RS485 / BACnet MSTP
   ▼
 Waveshare RS485-to-ETH (TCP Server, Port 8899)
@@ -31,7 +31,7 @@ Home Assistant
 
 ### Hardware
 
-* Zehnder ComfoBox Series 5 (ELESTA controller, type ECR450A000)
+* Zehnder ComfoBox Series 5 / 8 / .. (ELESTA controller, type ECR450A000)
 * Waveshare RS485-to-POE-ETH (B) adapter
 * RS485 cable: ComfoBox RS485 port → Waveshare A/B terminals
 
@@ -54,7 +54,7 @@ The ComfoBox must be configured to **38400 baud** (factory default is 76800). Th
 
 ### RS485 Wiring
 
-![ELESTA ECR450A000 — BACnet RS485 terminals 0/1/2 bottom left](IMG_1589.jpeg)
+
 
 ComfoBox ELESTA ECR450A000 BACnet RS485 terminals:
 * Terminal 0 = 0V (shield/GND)
@@ -105,8 +105,8 @@ allow_anonymous true
 Example:
 
 ```yaml
-waveshare_host: "192.168.0.24"
-waveshare_port: 8899
+waveshare_host: ""
+waveshare_port: ""
 baudrate: 38400
 mqtt_host: core-mosquitto
 mqtt_port: 1883
@@ -159,7 +159,7 @@ If no BACnet communication is established, try swapping the A/B wires at the Wav
 
 ### Hardware Setup
 * **ComfoBox:** Zehnder ComfoBox 8 (8 kW), ELESTA controller type ECR450A000
-* **Waveshare:** RS485-TO-POE-ETH (B), IP 192.168.0.24, port 8899, TCP Server mode
+* **Waveshare:** RS485-TO-POE-ETH (B), IP "", port "", TCP Server mode
 * **HA:** Home Assistant Green (aarch64), HA OS 17.1, Core 2026.3.0
 * **Wiring:** ComfoBox Terminal 1(B) → Waveshare B, Terminal 2(A) → Waveshare A, Terminal 0(0V) → GND
 
@@ -171,7 +171,7 @@ If no BACnet communication is established, try swapping the A/B wires at the Wav
 
 ### What Does Not Work
 * BACnet IAm is not received → `Didn't get any messages from the Bacnet Master device`
-* No BACnet MS/TP preamble `55 FF` found in raw RS485 dump (via `nc 192.168.0.24 8899 | xxd`)
+* No BACnet MS/TP preamble `55 FF` found in raw RS485 dump (via `nc "IP" "Port" | xxd`)
 * Tested baud rates: 38400 (data present), 76800 (only zeros)
 
 ### RS485 Raw Dump (38400 baud, 15 seconds)
