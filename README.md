@@ -30,25 +30,46 @@ Home Assistant
 ## Voraussetzungen
 
 ### Hardware
-- Zehnder ComfoBox Series 5 (ELESTA Steuerung)
-- Waveshare RS485-to-ETH Adapter (z.B. USR-TCP232-306 oder ähnlich)
-- RS485-Kabel: ComfoBox RS485-Port → Waveshare A/B Klemmen
+
+* Zehnder ComfoBox Series 5 (ELESTA Steuerung, Typ ECR450A000)
+* Waveshare RS485-to-POE-ETH (B) Adapter
+* RS485-Kabel: ComfoBox RS485-Port → Waveshare A/B Klemmen
 
 ### Waveshare Konfiguration
+
+![Waveshare RS485-TO-POE-ETH (B) im Schrank — LINK-LED blau = TCP-Verbindung aktiv](IMG_1590.jpeg)
+
 Öffne `http://<waveshare-ip>` im Browser (kein Passwort):
-- **Work Mode:** TCP Server
-- **Local Port:** 8899
-- **Baud Rate:** 38400 (muss mit ComfoBox OEM-Einstellung übereinstimmen)
-- **Data Bits:** 8, **Parity:** None, **Stop Bits:** 1
+
+* **Work Mode:** TCP Server
+* **Local Port:** 8899
+* **Baud Rate:** 38400 (muss mit ComfoBox OEM-Einstellung übereinstimmen)
+* **Data Bits:** 8, **Parity:** None, **Stop Bits:** 1
 
 ### ComfoBox OEM-Menü
+
 Die ComfoBox muss auf **38400 Baud** konfiguriert sein (Werkseinstellung ist 76800).
 Zugang über das OEM-Menü der ComfoBox-Bedieneinheit.
 
+> **Hinweis:** Ohne diese Änderung sendet die ComfoBox zwar RS485-Daten, aber kein gültiges BACnet MS/TP — das Add-on erhält kein IAm und startet nicht.
+
+### Verkabelung RS485
+
+![ELESTA ECR450A000 — BACnet RS485 Klemmen 0/1/2 unten links](IMG_1589.jpeg)
+
+ComfoBox Elesta ECR450A000 BACnet RS485 Klemmen:
+* Terminal 0 = 0V (Schirm/GND)
+* Terminal 1 = B (negativ)
+* Terminal 2 = A (positiv)
+
+Waveshare Klemmen entsprechend: A→A, B→B, GND→0V
+
 ### MQTT Broker
+
 Das Add-on benötigt **anonymen MQTT-Zugang** — RF77 ComfoBoxMqttConsole unterstützt keine MQTT-Authentifizierung.
 
 Mosquitto-Konfiguration (`/share/mosquitto/mosquitto.conf`):
+
 ```
 listener 1883
 allow_anonymous true
@@ -58,23 +79,21 @@ allow_anonymous true
 
 ## Installation
 
-1. **Repository hinzufügen** in HA unter Settings → Add-ons → Repositories:
+1. **Repository hinzufügen** in HA unter Settings → Apps → Repositories:
+
    ```
    https://github.com/ptpat/ha-comfobox-mqtt-addon
    ```
-
-2. **Add-on installieren:** ComfoBox MQTT Bridge
-
+2. **App installieren:** ComfoBox MQTT Bridge
 3. **Konfiguration anpassen** (siehe unten)
-
-4. **Add-on starten**
+4. **App starten**
 
 ---
 
 ## Konfiguration
 
 | Option | Typ | Default | Beschreibung |
-|--------|-----|---------|--------------|
+| --- | --- | --- | --- |
 | `waveshare_host` | string | — | IP-Adresse des Waveshare Adapters |
 | `waveshare_port` | int | 8899 | TCP-Port des Waveshare Adapters |
 | `baudrate` | int | 38400 | Baudrate (muss mit ComfoBox OEM übereinstimmen) |
@@ -82,9 +101,10 @@ allow_anonymous true
 | `mqtt_port` | int | 1883 | MQTT Broker Port |
 | `mqtt_base_topic` | string | ComfoBox | MQTT Basis-Topic |
 | `bacnet_master_id` | int | 1 | BACnet-Adresse der ComfoBox |
-| `bacnet_client_id` | int | 3 | BACnet-Adresse dieses Clients (muss verschieden von master_id sein) |
+| `bacnet_client_id` | int | 3 | BACnet-Adresse dieses Clients (muss verschieden von master\_id sein) |
 
 Beispiel:
+
 ```yaml
 waveshare_host: "192.168.0.24"
 waveshare_port: 8899
@@ -102,14 +122,15 @@ bacnet_client_id: 3
 
 Alle Topics beginnen mit dem konfigurierten `mqtt_base_topic` (Standard: `ComfoBox`).
 
-Lesen: `ComfoBox/<Kategorie>/<Name>`
-Schreiben: `ComfoBox/<Kategorie>/<Name>/Set`
+Lesen: `ComfoBox/<Kategorie>/<n>`
+Schreiben: `ComfoBox/<Kategorie>/<n>/Set`
 
 Beispiele:
-- `ComfoBox/Climate/OutdoorTemperature` — Aussentemperatur
-- `ComfoBox/Ventilation/VentilationMode` — Lüftungsstufe
-- `ComfoBox/Ventilation/VentilationMode/Set` — Lüftungsstufe setzen
-- `ComboBox/Special/NumberOfWritesPer24h` — Anzahl Schreibvorgänge heute
+
+* `ComfoBox/Climate/OutdoorTemperature` — Aussentemperatur
+* `ComfoBox/Ventilation/VentilationMode` — Lüftungsstufe
+* `ComfoBox/Ventilation/VentilationMode/Set` — Lüftungsstufe setzen
+* `ComboBox/Special/NumberOfWritesPer24h` — Anzahl Schreibvorgänge heute
 
 Eine vollständige Topic-Liste findet sich in der [RF77 Dokumentation](https://github.com/RF77/comfobox-mqtt).
 
@@ -120,13 +141,51 @@ Eine vollständige Topic-Liste findet sich in der [RF77 Dokumentation](https://g
 ## Technische Details / Bekannte Probleme
 
 ### aarch64 (HA Green) — tcsetattr ENOTTY
+
 Mono's `SerialPort` ruft `tcsetattr()` auf dem virtuellen seriellen Port auf. Auf ARM/aarch64 gibt der Linux-Kernel `ENOTTY` zurück wenn der Port ein PTY-Slave ist. Das Add-on löst dies mit einem `LD_PRELOAD`-Wrapper (`tcsetattr_fix.so`) der `ENOTTY` abfängt und Erfolg zurückgibt.
 
 ### Baudrate
+
 RF77 berichtet dass auf dem Raspberry Pi nur **38400 Baud** funktioniert hat — die ComfoBox muss im OEM-Menü entsprechend konfiguriert werden (Werkseinstellung 76800).
 
 ### RS485 Polarität
+
 Falls keine BACnet-Kommunikation zustande kommt, A/B Kabel am Waveshare tauschen.
+
+---
+
+## Aktueller Debugging-Stand (Hardware ComfoBox 8 / Elesta ECR450A000)
+
+> Dieser Abschnitt dokumentiert den aktuellen Inbetriebnahme-Stand für Rückfragen an RF77.
+
+### Hardware-Setup
+* **ComfoBox:** Zehnder ComfoBox 8 (8 kW), ELESTA Steuerung Typ ECR450A000
+* **Waveshare:** RS485-TO-POE-ETH (B), IP 192.168.0.24, Port 8899, TCP Server
+* **HA:** Home Assistant Green (aarch64), HA OS 17.1, Core 2026.3.0
+* **Verkabelung:** ComfoBox Terminal 1(B) → Waveshare B, Terminal 2(A) → Waveshare A, Terminal 0(0V) → GND
+
+### Was funktioniert
+* TCP-Verbindung Waveshare ↔ socat: **OK** (Waveshare LINK-LED leuchtet blau)
+* RS485-Daten von ComfoBox: **OK** (Waveshare ACT-LED flackert bei korrekter A/B Polarität)
+* LD_PRELOAD tcsetattr_fix.so: **OK** (kein ENOTTY mehr)
+* Mono startet und sendet WhoIs: **OK**
+
+### Was nicht funktioniert
+* BACnet IAm kommt nicht zurück → `Didn't get any messages from the Bacnet Master device`
+* Im raw RS485-Dump (via `nc 192.168.0.24 8899 | xxd`) ist **kein BACnet MS/TP Preamble `55 FF`** zu finden
+* Getestete Baudraten: 38400 (Daten vorhanden), 76800 (nur Nullen)
+
+### RS485 Raw Dump (38400 Baud, 15 Sekunden)
+Repetitives Muster — kein `55 FF` BACnet Preamble gefunden:
+```
+00000000: 1886 1838 0cd8 1986 db0c 1a18 9a96 071f
+00000010: e767 e3ee f347 5dce 191e ef47 1d1f 19cb
+00000020: 4759 dfdf 1819 1838 0cd8 1986 ef0c ...
+...
+000001c0: d818 8618 380c d818 8618 380c d818 8618
+000001d0: 380c d818 8618 380c d818 8618 380c d818
+000001e0: 8618 380c d818 8618 380c d818 8618 380c
+```
 
 ---
 
@@ -135,27 +194,35 @@ Falls keine BACnet-Kommunikation zustande kommt, A/B Kabel am Waveshare tauschen
 Für alle die dasselbe Problem debuggen, hier die Irrwege:
 
 ### Alpine Linux (ghcr.io/hassio-addons/base)
+
 Die Standard-HA-Addon-Basis verwendet Alpine mit **musl libc**. Mono's `SerialPort.isatty()` gibt auf musl `false` zurück für PTY-Slaves → `Not a tty` Fehler. Lösung: Wechsel zu **Debian bookworm-slim** (glibc).
 
 ### /dev/ttyS0 via devices:
+
 `/dev/ttyS0` auf HA Green ist ein dummy UART ohne echte Hardware. `socat` kann darauf nicht schreiben → `I/O error`. Kein brauchbarer serieller Port.
 
 ### socat mit ispeed/ospeed
+
 `socat PTY,ispeed=76800` — socat kennt 76800 nicht als Standard-Baudrate → `cfsetispeed: Invalid argument`. Nicht-Standard-Baudraten werden von socat nicht unterstützt.
 
 ### socat rawer statt raw
+
 `rawer` setzt intern Baudrate-Optionen auf dem PTY → `cfsetispeed: Invalid argument`. Lösung: `raw` verwenden.
 
 ### stty vor Mono-Start
+
 `stty -F /dev/pts/1 38400` auf einem PTY-Slave schlägt lautlos fehl (`|| true`). Mono ruft trotzdem `tcsetattr()` auf → `ENOTTY`. stty hilft nicht.
 
 ### socat PTY↔PTY Topologie
+
 Zwei socat-Prozesse: PTY-A↔PTY-B und PTY-B↔TCP. Mono bekommt PTY-A. Trotzdem `ENOTTY` — PTY-Slaves auf ARM/aarch64 Linux unterstützen `tcsetattr()` grundsätzlich nicht vollständig, unabhängig von der Topologie.
 
 ### Baudrate 76800
+
 RF77 README: *"On my Raspberry only a baudrate of 38400 was working."* Die ComfoBox muss im OEM-Menü auf 38400 umgestellt werden.
 
 ### Mono aus externem Repository (mono-project.com)
+
 Im HA-Build-Container kein Internetzugang für `gpg keyserver` oder `curl` zu externen Repos → Build schlägt fehl mit Exit Code 100. Lösung: `mono-complete` direkt aus Debian Bookworm Standard-Repository.
 
 ---
